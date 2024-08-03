@@ -1,0 +1,13 @@
+*.exe
+*.out
+*.csv
+*.json
+*.asv
+*.png
+*.o
+*.fig
+*.mat
+*.eps
+*.mp4
+*.gif
+*.pdf
