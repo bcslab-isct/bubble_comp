@@ -166,10 +166,16 @@ void parameter(){
     
     // coefficients of 3-stage 3rd-order Runge Kutta method
     RK_stage = 3;
-    RK_alpha = {{1.0, 0.0, 0.0},
-                {0.75, 0.25, 0.0},
-                {1.0/3.0, 0.0, 2.0/3.0}};
-    RK_beta = {1.0, 0.25, 2.0/3.0};
+    RK_alpha = vec2d(RK_stage, vec1d(RK_stage));
+    RK_alpha[0][0] = 1.0; RK_alpha[0][1] = 0.0; RK_alpha[0][2] = 0.0;
+    RK_alpha[1][0] = 0.75; RK_alpha[1][1] = 0.25; RK_alpha[1][2] = 0.0;
+    RK_alpha[2][0] = 1.0/3.0; RK_alpha[2][1] = 0.0; RK_alpha[2][2] = 2.0/3.0;
+    RK_beta = vec1d(RK_stage);
+    RK_beta[0] = 1.0; RK_beta[1] = 0.25; RK_beta[2] = 2.0/3.0;
+    // RK_alpha = {{1.0, 0.0, 0.0},
+    //             {0.75, 0.25, 0.0},
+    //             {1.0/3.0, 0.0, 2.0/3.0}};
+    // RK_beta = {1.0, 0.25, 2.0/3.0};
     
     CFL = 0.5; // Courant number
     
