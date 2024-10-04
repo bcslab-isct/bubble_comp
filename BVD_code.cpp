@@ -577,22 +577,65 @@ void plot_result(){
     else if (plot_var == 3) variable_name = "pressure";
     else if (plot_var == 4) variable_name = "BVD_active";
     
-    gp = popen(GNUPLOT, "w");
-    if (!gp){
-        cout << "unable to start gnuplot" << endl;
-    }
-    else {
-        // plot numerical result using gnuplot
-        fprintf(gp, "set term wxt 1\n");
-        fprintf(gp, "set size ratio 1\n");
-        fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
-        fprintf(gp, "set xl \"x\"\n");
-        fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
-        fprintf(gp, "set title \"1D Euler\"\n");
-        fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
-        fflush(gp);
-        pclose(gp);
-    }
+    #if defined(_WIN32) || defined(_WIN64)
+        // for windows pc
+        gp = _popen(GNUPLOT, "w");
+        if (!gp){
+            cout << "unable to start gnuplot" << endl;
+        }
+        else {
+            // plot numerical result using gnuplot
+            fprintf(gp, "set term wxt 1\n");
+            fprintf(gp, "set size ratio 1\n");
+            fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
+            fprintf(gp, "set xl \"x\"\n");
+            fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
+            fprintf(gp, "set title \"1D Euler\"\n");
+            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
+            fflush(gp);
+            _pclose(gp);
+        }
+        
+    #elif defined(__APPLE__) && defined(__MACH__)
+        // for mac pc
+        gp = popen(GNUPLOT, "w");
+        if (!gp){
+            cout << "unable to start gnuplot" << endl;
+        }
+        else {
+            // plot numerical result using gnuplot
+            // fprintf(gp, "set term wxt 1\n");
+            fprintf(gp, "set size ratio 1\n");
+            fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
+            fprintf(gp, "set xl \"x\"\n");
+            fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
+            fprintf(gp, "set title \"1D Euler\"\n");
+            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
+            fflush(gp);
+            pclose(gp);
+        }
+        
+    #elif defined(__linux__)
+        // for linux pc
+        gp = popen(GNUPLOT, "w");
+        if (!gp){
+            cout << "unable to start gnuplot" << endl;
+        }
+        else {
+            // plot numerical result using gnuplot
+            fprintf(gp, "set term wxt 1\n");
+            fprintf(gp, "set size ratio 1\n");
+            fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
+            fprintf(gp, "set xl \"x\"\n");
+            fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
+            fprintf(gp, "set title \"1D Euler\"\n");
+            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
+            fflush(gp);
+            pclose(gp);
+        }
+        
+    #endif
+        
 }
 
 double sign(double a){
