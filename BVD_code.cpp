@@ -569,10 +569,15 @@ void output_result(){
 void plot_result(){
     
     FILE *gp;
+    string variable_name;
+    
+    int plot_var = 1; // 1: density, 2: velocity, 3: pressure, 4: BVD_active
+    if      (plot_var == 1) variable_name = "density";
+    else if (plot_var == 2) variable_name = "velocity";
+    else if (plot_var == 3) variable_name = "pressure";
+    else if (plot_var == 4) variable_name = "BVD_active";
+    
     gp = popen(GNUPLOT, "w");
-    
-    int plot_var = 3; // 1: density, 2: velocity, 3: pressure, 4: BVD_active
-    
     if (!gp){
         cout << "unable to start gnuplot" << endl;
     }
@@ -582,7 +587,7 @@ void plot_result(){
         fprintf(gp, "set size ratio 1\n");
         fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
         fprintf(gp, "set xl \"x\"\n");
-        fprintf(gp, "set yl \"rho\"\n");
+        fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
         fprintf(gp, "set title \"1D Euler\"\n");
         fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
         fflush(gp);
