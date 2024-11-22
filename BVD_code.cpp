@@ -32,6 +32,7 @@ typedef std::vector<vec1d> vec2d;
 typedef std::vector<vec2d> vec3d;
 
 // global variables
+int problem_type;
 int scheme_type;
 string scheme_name;
 double gamma_;
@@ -127,6 +128,11 @@ int main(void){
 void parameter(){
     int i;
     
+    // set benchmark test
+    cout << "Press number of benchmark test." << endl;
+    cout << "1: Sod problem, 2: Le Blanc problem" << endl;
+    cin >> problem_type;
+    
     // set numerical scheme
     cout << "Press number of scheme." << endl;
     cout << "1: MUSCL, 2: THINC, 3: MUSCL-THINC-BVD" << endl;
@@ -151,8 +157,17 @@ void parameter(){
     
     nx = 200; // number of cell in computational domain
     NX = nx + ng * 2; // total number of cell including ghost cell
-    x_range[0] = 0.0; // x_coordinate at left boundary of computational domain
-    x_range[1] = 1.0; // x_coordinate at right boundary of computational domain
+    
+    // Sod problem
+    if (problem_type == 1){
+        x_range[0] = 0.0; // x_coordinate at left boundary of computational domain
+        x_range[1] = 1.0; // x_coordinate at right boundary of computational domain
+    }
+    // Le Blanc problem
+    else if (problem_type == 2){
+        x_range[0] = 0.0; // x_coordinate at left boundary of computational domain
+        x_range[1] = 9.0; // x_coordinate at right boundary of computational domain
+    }
     
     dx = (x_range[1] - x_range[0]) / nx; // cell length
     xc = vec1d(nx); // x-coordinate at cell center
@@ -192,26 +207,38 @@ void parameter(){
 }
 
 void initial_condition(){
-    double rho_L, rho_R, u_L, u_R, p_L, p_R;
+    double rho_L, rho_R, u_L, u_R, p_L, p_R, x_border;
     int i;
     
     // Sod shock tube problem
-    rho_L = 1.0; rho_R = 0.125; // density
-    u_L = 0.0; u_R = 0.0; // velocity
-    p_L = 1.0; p_R = 0.1; // pressure
-    gamma_ = 1.4; // specific heat ratio
-    t_end = 0.25; // time to end calculation
+    if (problem_type == 1){
+        rho_L = 1.0; rho_R = 0.125; // density
+        u_L = 0.0; u_R = 0.0; // velocity
+        p_L = 1.0; p_R = 0.1; // pressure
+        x_border = 0.5; // border of initial condition
+        gamma_ = 1.4; // specific heat ratio
+        t_end = 0.25; // time to end calculation
+    }
+    // Le Blanc problem
+    else if (problem_type == 2){
+        rho_L = 1.0; rho_R = 0.001; // density
+        u_L = 0.0; u_R = 0.0; // velocity
+        p_L = 0.1*(2./3.); p_R = 1.e-10*(2./3.); // pressure
+        x_border = 3.0; // border of initial condition
+        gamma_ = 5./3.; // specific heat ratio
+        t_end = 6.0; // time to end calculation
+    }
 
     for (i = 0; i < nx; i++){
-        if (xc[i] < 0.5){
+        if (xc[i] < x_border){
             U[0][0][ng + i] = rho_L; // rho
             U[0][1][ng + i] = rho_L * u_L; // rhou
-            U[0][2][ng + i] = p_L / (gamma_ - 1.0) + 0.5 * u_L * u_L; //rhoE
+            U[0][2][ng + i] = p_L / (gamma_ - 1.0) + 0.5 * rho_L * u_L * u_L; //rhoE
         }
         else {
             U[0][0][ng + i] = rho_R; // rho
             U[0][1][ng + i] = rho_R * u_R; // rhou
-            U[0][2][ng + i] = p_R / (gamma_ - 1.0) + 0.5 * u_R * u_R; // rhoE
+            U[0][2][ng + i] = p_R / (gamma_ - 1.0) + 0.5 * rho_R * u_R * u_R; // rhoE
         }
     }
 }
@@ -515,7 +542,7 @@ void cal_dt(double MWS_x){
 
 void update(){
     int i, m, s, k_next = (k + 1) % RK_stage;
-    double L;
+    double L, rho, rhou, rhoE, u, p;
     
     for (i = ng; i < ng + nx; i++){
         for (m = 0; m < num_var; m++){
@@ -528,6 +555,18 @@ void update(){
                 U[k_next][m][i] += RK_alpha[k][s] * U[s][m][i];
             }
             U[k_next][m][i] += RK_beta[k] * L * dt;
+        }
+        
+        // check positivity
+        rho = U[k_next][0][i];
+        rhou = U[k_next][1][i];
+        rhoE = U[k_next][2][i];
+        u = rhou / rho;
+        p = (gamma_ - 1.0) * (rhoE - 0.5 * rho * u * u);
+        if (rho <= 0.0 || p <= 0.0){
+            cout << "rho or p < 0" << endl;
+            cout << "rho = " << rho << ", p = " << p << endl;
+            getchar();
         }
     }
 }
@@ -570,12 +609,20 @@ void plot_result(){
     
     FILE *gp;
     string variable_name;
+    double yr_min, yr_max;
     
     int plot_var = 1; // 1: density, 2: velocity, 3: pressure, 4: BVD_active
     if      (plot_var == 1) variable_name = "density";
     else if (plot_var == 2) variable_name = "velocity";
     else if (plot_var == 3) variable_name = "pressure";
     else if (plot_var == 4) variable_name = "BVD_active";
+    
+    if (problem_type == 1){ // Sod problem
+        yr_min = 0.0; yr_max = 1.2;
+    }
+    else if (problem_type == 2){ // Le Blanc problem
+        yr_min = 1.0e-3; yr_max = 1.0;
+    }
     
     #if defined(_WIN32) || defined(_WIN64)
         // for windows pc
@@ -587,7 +634,7 @@ void plot_result(){
             // plot numerical result using gnuplot
             fprintf(gp, "set term wxt 1\n");
             fprintf(gp, "set size ratio 1\n");
-            fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
+            fprintf(gp, "set yr[%f:%f]\n", yr_min, yr_max);
             fprintf(gp, "set xl \"x\"\n");
             fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
             fprintf(gp, "set title \"1D Euler\"\n");
@@ -606,7 +653,7 @@ void plot_result(){
             // plot numerical result using gnuplot
             // fprintf(gp, "set term wxt 1\n");
             fprintf(gp, "set size ratio 1\n");
-            fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
+            fprintf(gp, "set yr[%f:%f]\n", yr_min, yr_max);
             fprintf(gp, "set xl \"x\"\n");
             fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
             fprintf(gp, "set title \"1D Euler\"\n");
@@ -625,7 +672,8 @@ void plot_result(){
             // plot numerical result using gnuplot
             fprintf(gp, "set term wxt 1\n");
             fprintf(gp, "set size ratio 1\n");
-            fprintf(gp, "set yr[%f:%f]\n", 0.0, 1.2);
+            // fprintf(gp, "set logscale y\n");
+            fprintf(gp, "set yr[%f:%f]\n", yr_min, yr_max);
             fprintf(gp, "set xl \"x\"\n");
             fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
             fprintf(gp, "set title \"1D Euler\"\n");
