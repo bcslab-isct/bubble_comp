@@ -48,6 +48,7 @@ double beta, T1_THINC;
 int BVD, BVD_s;
 vec3i BVD_active;
 vec3d W_L, W_R;
+int bvc_check;
 vec2d F;
 double CFL;
 int k, RK_stage;
@@ -65,6 +66,7 @@ double Phi_MUSCL(double);
 void THINC(double*, double*, const vec1d&);
 void BVD_selection();
 void eigen_vectors_Euler_cons_R_x(int, int, int);
+void bvc_Euler_x(int);
 void Riemann_solver_Euler_HLLC(double*);
 void cal_dt(double);
 void update();
@@ -81,7 +83,7 @@ int main(void){
     
     initial_condition();
     
-    t = 0.; t_step = 0; per = 1; dt_last = 0.; dt = 0.0; // initialization
+    t = 0.; t_step = 0; per = 1; dt_last = 0.; dt = 0.0; bvc_check = 0; // initialization
     while (1){
         // adjust value of dt in final time step
         if (t + dt > t_end) dt_last = t_end - t;
@@ -118,6 +120,7 @@ int main(void){
     }
     
     cout << "\nt_step = " << t_step << ", t = " << t << endl;
+    if (bvc_check == 1) cout << "bvc is activated" << endl;
     
     output_result();
     plot_result();
@@ -274,7 +277,7 @@ void reconstruction(){
     for (i = ng - BVD_s; i < ng + nx + 1 + BVD_s; i++){ // each cell boundary
         for (m = 0; m < num_var; m++){ // each variables
             for (xi = 0; xi < ns + 1; xi++){
-                stencil[m][xi]=U[k][m][i - 1 - (ns - 1) / 2 + xi]; // stencil for reconstruction
+                stencil[m][xi] = U[k][m][i - 1 - (ns - 1) / 2 + xi]; // stencil for reconstruction
             }
         }
         
@@ -314,6 +317,8 @@ void reconstruction(){
     for (i = ng; i < ng + nx + 1; i++){ // each cell boundary
         eigen_vectors_Euler_cons_R_x(i - 1, i, i); // multiply cell boundary values by right eigenvector
     }
+    
+    bvc_Euler_x(0); // if the reconstructed values violate positivity, the reconstruction function is degraded to 1st-order method to keep positivity.
 }
 
 void MUSCL(double *qL, double *qR, const vec1d& q){
@@ -458,6 +463,50 @@ void eigen_vectors_Euler_cons_R_x(int IL, int IR, int Ix){
         W_L[0][m][Ix] = (R_x[m][0] * VL_copy[0] + R_x[m][2] * VL_copy[2]) + R_x[m][1] * VL_copy[1];
         W_R[0][m][Ix] = (R_x[m][0] * VR_copy[0] + R_x[m][2] * VR_copy[2]) + R_x[m][1] * VR_copy[1];
     }
+}
+
+void bvc_Euler_x(int b){
+    int i, m;
+    double rho_L_plus, rhou_L_plus, rhoE_L_plus, u_L_plus, p_L_plus, rho_R_minus, rhou_R_minus, rhoE_R_minus, u_R_minus, p_R_minus;
+    
+    for (i = ng; i < ng + nx; i++){
+        // conservative variables
+        rho_L_plus = W_L[b][0][i + 1]; rho_R_minus = W_R[b][0][i];
+        rhou_L_plus = W_L[b][1][i + 1]; rhou_R_minus = W_R[b][1][i];
+        rhoE_L_plus = W_L[b][2][i + 1]; rhoE_R_minus = W_R[b][2][i];
+        // primitive variables
+        u_L_plus = rhou_L_plus / rho_L_plus; u_R_minus = rhou_R_minus / rho_R_minus;
+        p_L_plus = (gamma_ - 1.0) * (rhoE_L_plus - 0.5 * rhou_L_plus * u_L_plus); p_R_minus = (gamma_ - 1.0) * (rhoE_R_minus - 0.5 * rhou_R_minus * u_R_minus);
+        if ((rho_L_plus <= 0. || p_L_plus <= 0.) || (rho_R_minus <= 0. || p_R_minus <= 0.)){
+            bvc_check = 1;
+            for (m = 0; m < num_var; m++) W_R[b][m][i] = W_L[b][m][i + 1] = U[b][m][i];
+        }
+    }
+    
+    // conservative variables
+    rho_L_plus = W_L[b][0][ng];
+    rhou_L_plus = W_L[b][1][ng];
+    rhoE_L_plus = W_L[b][2][ng];
+    // primitive variables
+    u_L_plus = rhou_L_plus / rho_L_plus;
+    p_L_plus = (gamma_ - 1.0) * (rhoE_L_plus - 0.5 * rhou_L_plus * u_L_plus);
+    if (rho_L_plus <= 0. || p_L_plus <= 0.){
+        bvc_check = 1;
+        for (m = 0; m < num_var; m++) W_L[b][m][ng + 1] = U[b][m][ng];
+    }
+    
+    // conservative variables
+    rho_R_minus = W_R[b][0][ng + nx];
+    rhou_R_minus = W_R[b][1][ng + nx];
+    rhoE_R_minus = W_R[b][2][ng + nx];
+    // primitive variables
+    u_R_minus = rhou_R_minus / rho_R_minus;
+    p_R_minus = (gamma_ - 1.0) * (rhoE_R_minus - 0.5 * rhou_R_minus * u_R_minus);
+    if (rho_R_minus <= 0. || p_R_minus <= 0.){
+        bvc_check = 1;
+        for (m = 0; m < num_var; m++) W_R[b][m][ng + nx] = U[b][m][ng + nx];
+    }
+    
 }
 
 void Riemann_solver_Euler_HLLC(double *MWS_x){
