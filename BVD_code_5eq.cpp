@@ -29,36 +29,40 @@ using std::string;
 typedef std::vector<int> vec1i;
 typedef std::vector<vec1i> vec2i;
 typedef std::vector<vec2i> vec3i;
+typedef std::vector<vec3i> vec4i;
+typedef std::vector<vec4i> vec5i;
 typedef std::vector<double> vec1d;
 typedef std::vector<vec1d> vec2d;
 typedef std::vector<vec2d> vec3d;
+typedef std::vector<vec3d> vec4d;
+typedef std::vector<vec4d> vec5d;
 
 // global variables
-int dim;
-int problem_type;
-int scheme_type;
-string scheme_name;
-double gamma_;
-int num_var;
-int nx, ngx, NX, NBX, ny, ngy, NY, NBY, nz, ngz, NZ, NBZ, NN;
-int ns;
-double x_range[2], dx, y_range[2], dy, z_range[2], dz;
-vec1d xc, xb, yc, yb, zc, zb;
-double t, t_end, dt, dt_last;
-int t_step;
-vec1i boundary_type;
-std::string material;
-vec3d U;
-double beta, T1_THINC;
-int BVD, BVD_s;
-vec3i BVD_active;
-vec3d W_x_L, W_x_R, W_y_L, W_y_R, W_z_L, W_z_R;
-int bvc_check;
-vec2d F_x, F_y, F_z;
-double CFL;
-int k, RK_stage;
-vec2d RK_alpha;
-vec1d RK_beta;
+int dim; // number of spatial dimension (1, 2, or 3)
+int EOS_type; // 1: ideal gas, 2: stiffened gas, 3: Mie-Gruneisen EOS
+int problem_type; // 1: 2D static droplet problem
+int scheme_type; // 1: MUSCL, 2: THINC, 3: MUSCL-THINC-BVD
+string scheme_name; // name of numerical scheme
+int num_var; // number of variables in 5eq model (alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE)
+int nx, ngx, NX, NBX, ny, ngy, NY, NBY, nz, ngz, NZ, NBZ, NN; // number of cell in x, y, z-direction in computational domain, including ghost cells
+int ns; // number of cells in stencil for reconstruction
+double x_range[2], dx, y_range[2], dy, z_range[2], dz; // range of computational domain in x, y, z-direction
+vec1d xc, xb, yc, yb, zc, zb; // x, y, z-coordinate at cell center and cell boundary
+double t, t_end, dt, dt_last; // time, end time, time step, last time step
+int t_step; // time step number
+vec1i boundary_type; // boundary condition type (1: outflow)
+std::string material; // material name for equation of state
+vec3d U; // conservative variables (alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE)
+double beta, T1_THINC; // gradient parameter and precalculated value for THINC scheme
+int BVD, BVD_s; // number of candidate reconstruction schemes, number of cells to be expanded outside the computational domain for the BVD scheme
+vec4i BVD_active; // record cells where MUSCL has been replaced by THINC
+vec3d W_x_L, W_x_R, W_y_L, W_y_R, W_z_L, W_z_R; // reconstructed left-side and right-side cell boundary value in x, y, z-direction
+int bvc_check; // flag for BVC (boundary value correction)
+vec2d F_x, F_y, F_z; // flux vector in x, y, z-direction
+double CFL; // Courant number
+int rk, RK_stage; // stage number in Runge Kutta method
+vec2d RK_alpha; // coefficients of Runge Kutta method
+vec1d RK_beta; // coefficients of Runge Kutta method
 
 double gamma_,gamma1,gamma2,pi1,pi2,eta1,eta2,eta1d,eta2d,Cv1,Cv2,Cp1,Cp2,As,Bs,Cs,Ds;
 double cB11,cB12,cB21,cB22,cE11,cE12,cE21,cE22,rho01,rho02,e01,e02;
@@ -104,7 +108,7 @@ int main(void){
         
         if (BVD > 1) initialize_BVD_active();
         
-        for (k = 0; k < RK_stage; k++){
+        for (rk = 0; rk < RK_stage; rk++){
             // set values in ghost cells
             boundary_condition();
             
@@ -254,7 +258,7 @@ void parameter(){
         W_z_R = vec3d(BVD, vec2d(num_var, vec1d(NBZ, 0.0))); // reconstructed right-side cell boundary value in z-direction
         F_z = vec2d(num_var, vec1d(NBZ, 0.0)); // flux vector in z-direction
     }
-    BVD_active = vec3i(RK_stage, vec2i(num_var, vec1i(NN, 0))); // record cells where MUSCL has been replaced by THINC
+    BVD_active = vec4i(dim, vec3i(RK_stage, vec2i(num_var, vec1i(NN, 0)))); // record cells where MUSCL has been replaced by THINC
     
     // for THINC scheme
     beta = 1.6; // gradient parameter
@@ -275,6 +279,61 @@ void EOS_param(){
         cout<<"material is not defined."<<endl;
         getchar();
     }
+}
+
+void EOS_param_ref
+(
+    double *Gammak, double *p_refk, double *e_refk, 
+    double rhok, double gammak, double pik, double etak,
+    double cB1k, double cB2k, double cE1k, double cE2k, double rho0k, double e0k
+){
+    
+    //ideal gas
+    if (EOS_type==1){
+        *Gammak=gammak-1.0;
+        *p_refk=0.0;
+        *e_refk=0.0;
+    }
+    
+    //stiffened gas
+    else if (EOS_type==2){
+        *Gammak=gammak-1.0;
+        *p_refk=-gammak*pik;
+        *e_refk=etak;
+    }
+    
+    //Mie-Gruneisen EOS
+    else if (EOS_type==3){
+        double rho_ratio=rho0k/rhok;
+        *Gammak=gammak-1.0;
+        *p_refk=cB1k*pow(rho_ratio,-cE1k)-cB2k*pow(rho_ratio,-cE2k);
+        *e_refk=-cB1k/((1.0-cE1k)*rho0k)*(pow(rho_ratio,1.0-cE1k)-1.0)+cB2k/((1.0-cE2k)*rho0k)*(pow(rho_ratio,1.0-cE2k)-1.0)-e0k;
+    }
+}
+
+double sound_speed_square
+(
+    double rhok, double pk,
+    double gammak, double pik, double etak,
+    double cB1k, double cB2k, double cE1k, double cE2k, double rho0k, double e0k
+){
+    
+    double Gammak,p_refk,e_refk,dGammak,dp_refk,de_refk,cck;
+    
+    EOS_param_ref(&Gammak,&p_refk,&e_refk,rhok,gammak,pik,etak,cB1k,cB2k,cE1k,cE2k,rho0k,e0k);
+    if (EOS_type==1 || EOS_type==2){
+        dGammak=0.0;
+        dp_refk=0.0;
+        de_refk=0.0;
+    }
+    else if (EOS_type==3){
+        double rho_ratio=rhok/rho0k;
+        dGammak=0.0;
+        dp_refk=(cE1k*cB1k*pow(rho_ratio,cE1k-1.0)-cE2k*cB2k*pow(rho_ratio,cE2k-1.0))/rho0k;
+        de_refk=(cB1k*pow(rho_ratio,cE1k-2.0)-cB2k*pow(rho_ratio,cE2k-2.0))/pow2(rho0k);
+    }
+    cck=((Gammak+1.0)*pk-p_refk)/rhok+(pk-p_refk)/Gammak*dGammak+dp_refk-rhok*Gammak*de_refk;
+    return cck;
 }
 
 void initial_condition(){
@@ -385,11 +444,18 @@ void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,do
 }
 
 void initialize_BVD_active(){
-    int i, m;
-    for (i = 0; i < NX; i++){
-        for (k = 0; k < RK_stage; k++){
+    int i, j, k, m, Ic, d;
+    for (d = 0; d < dim; d++){
+        for (rk = 0; rk < RK_stage; rk++){
             for (m = 0; m < num_var; m++){
-                BVD_active[k][m][i] = 0;
+                for (i = 0; i < NX; i++){
+                    for (j = 0; j < NY; j++){
+                        for (k = 0; k < NZ; k++){
+                            Ic = I_c(i, j, k);
+                            BVD_active[d][rk][m][Ic] = 0; // initialize BVD_active
+                        }
+                    }
+                }
             }
         }
     }
@@ -401,62 +467,92 @@ void boundary_condition(){
     // outflow condition
     for (i = 0; i < ngx; i++){
         for (m = 0; m < num_var; m++){
-            U[k][m][i] = U[k][m][ngx];
-            U[k][m][NX - 1 - i] = U[k][m][nx + ngx - 1];
+            U[rk][m][i] = U[rk][m][ngx];
+            U[rk][m][NX - 1 - i] = U[rk][m][nx + ngx - 1];
         }
     }
 }
 
 void reconstruction(){
-    int i, m, xi;
+    int i, j, k, m, xi, Ixp, Ixm;
     double q_L, q_R;
-    vec2d stencil(num_var, vec1d(ns + 1));
+    vec2d stencil(num_var, vec1d(ns));
     
-    for (i = ngx - BVD_s; i < ngx + nx + 1 + BVD_s; i++){ // each cell boundary
-        for (m = 0; m < num_var; m++){ // each variables
-            for (xi = 0; xi < ns + 1; xi++){
-                stencil[m][xi] = U[k][m][i - 1 - (ns - 1) / 2 + xi]; // stencil for reconstruction
+    // reconstruction in x-direction
+    if (dim >= 1){
+        for (i = ngx - 1 - BVD_s; i < ngx + nx + 1 + BVD_s; i++){ // each cell in x-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                    
+                    // put conservative variables in stencil
+                    for (m = 0; m < num_var; m++){ // each variables
+                        for (xi = 0; xi < ns; xi++){
+                            stencil[m][xi] = U[rk][m][I_c(i - (ns - 1) / 2 + xi, j, k)]; // stencil for reconstruction
+                        }
+                    }
+                    
+                    // calculate primitive variables from conservative variables
+                    for (xi = 0; xi < ns; xi++){
+                        cons_to_prim_5eq(&stencil[1][xi], &stencil[2][xi], &stencil[3][xi], &stencil[4][xi], &stencil[5][xi], &stencil[6][xi],
+                            stencil[0][xi], stencil[1][xi], stencil[2][xi], stencil[3][xi], stencil[4][xi], stencil[5][xi], stencil[6][xi]);
+                            stencil[1][xi] = stencil[0][xi] * stencil[1][xi];
+                            stencil[2][xi] = (1.0 - stencil[0][xi]) * stencil[2][xi];
+                    }
+                        
+                    // calculate cell boundary values
+                    // q_L: left-side cell boundary value at x_{i+1/2}
+                    // q_R: right-side cell boundary value at x_{i-1/2}
+                    Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                    Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                    for (m = 0; m < num_var; m++){
+                        
+                        if (scheme_type == 1){
+                            MUSCL(&q_L, &q_R, stencil[m]);
+                            W_x_L[0][m][Ixp] = q_L;
+                            W_x_R[0][m][Ixm] = q_R;
+                        }
+                        else if (scheme_type == 2){
+                            THINC(&q_L, &q_R, stencil[m]);
+                            W_x_L[0][m][Ixp] = q_L;
+                            W_x_R[0][m][Ixm] = q_R;
+                        }
+                        else if (scheme_type == 3){
+                            MUSCL(&q_L, &q_R, stencil[m]);
+                            W_x_L[0][m][Ixp] = q_L;
+                            W_x_R[0][m][Ixm] = q_R;
+                            THINC(&q_L, &q_R, stencil[m]);
+                            W_x_L[1][m][Ixp] = q_L;
+                            W_x_R[1][m][Ixm] = q_R;
+                        }
+                        
+                    }
+                }
             }
         }
         
-        eigen_vectors_Euler_cons_L_x(stencil, i - 1, i); // multiply stencil by left eigenvector
-        
-        // calculate cell boundary values
-        // q_L: left-side cell boundary value at x_{i-1/2}
-        // q_R: right-side cell boundary value at x_{i-1/2}
-        for (m = 0; m < num_var; m++){
-            
-            if (scheme_type == 1){
-                MUSCL(&q_L, &q_R, stencil[m]);
-                W_L[0][m][i] = q_L;
-                W_R[0][m][i] = q_R;
-            }
-            else if (scheme_type == 2){
-                THINC(&q_L, &q_R, stencil[m]);
-                W_L[0][m][i] = q_L;
-                W_R[0][m][i] = q_R;
-            }
-            else if (scheme_type == 3){
-                MUSCL(&q_L, &q_R, stencil[m]);
-                W_L[0][m][i] = q_L;
-                W_R[0][m][i] = q_R;
-                THINC(&q_L, &q_R, stencil[m]);
-                W_L[1][m][i] = q_L;
-                W_R[1][m][i] = q_R;
-            }
-            
+        if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
+            BVD_selection_x();
         }
+        
+        
+        for (i = ngx - 1; i < ngx + nx + 1; i++){ // each cell in x-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                    Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                    Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                    
+                    W_x_L[0][1][Ixp]=W_x_L[0][1][Ixp]/W_x_L[0][0][Ixp]; //rho1=alpha1rho1/alpha1
+                    W_x_L[0][2][Ixp]=W_x_L[0][2][Ixp]/(1.0-W_x_L[0][0][Ixp]); //rho2=alpha2rho2/alpha2
+                    
+                    W_x_R[0][1][Ixm]=W_x_R[0][1][Ixm]/W_x_R[0][0][Ixm]; //rho1=alpha1rho1/alpha1
+                    W_x_R[0][2][Ixm]=W_x_R[0][2][Ixm]/(1.0-W_x_R[0][0][Ixm]); //rho2=alpha2rho2/alpha2
+                }
+            }
+        }
+        
+        // bvc_Euler_x(0); // if the reconstructed values violate positivity, the reconstruction function is degraded to 1st-order method to keep positivity.
     }
     
-    if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
-        BVD_selection();
-    }
-    
-    for (i = ngx; i < ngx + nx + 1; i++){ // each cell boundary
-        eigen_vectors_Euler_cons_R_x(i - 1, i, i); // multiply cell boundary values by right eigenvector
-    }
-    
-    bvc_Euler_x(0); // if the reconstructed values violate positivity, the reconstruction function is degraded to 1st-order method to keep positivity.
 }
 
 void MUSCL(double *qL, double *qR, const vec1d& q){
@@ -512,140 +608,160 @@ void THINC(double *qL, double *qR, const vec1d& q){
     }
 }
 
-void BVD_selection(){
-    int i, m;
+void BVD_selection_x(){
+    int i, j, k, m, Ixm, Ixp;
     double TBV[2];
+    int d = 0; // x-direction
     
     for (m = 0; m < num_var; m++){
         // calculate TBV (Total Boundary Variation) and compare
-        for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell
-            TBV[0] = fabs(W_L[0][m][i] - W_R[0][m][i]) + fabs(W_L[0][m][i + 1] - W_R[0][m][i + 1]); // TBV of MUSCL
-            TBV[1] = fabs(W_L[1][m][i] - W_R[1][m][i]) + fabs(W_L[1][m][i + 1] - W_R[1][m][i + 1]); // TBV of THINC
-            if (TBV[0] > TBV[1]){
-                BVD_active[k][m][i] = 1;
+        for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                    Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                    Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                    TBV[0] = fabs(W_x_L[0][m][Ixm] - W_x_R[0][m][Ixm]) + fabs(W_x_L[0][m][Ixp] - W_x_R[0][m][Ixp]); // TBV of MUSCL
+                    TBV[1] = fabs(W_x_L[1][m][Ixm] - W_x_R[1][m][Ixm]) + fabs(W_x_L[1][m][Ixp] - W_x_R[1][m][Ixp]); // TBV of THINC
+                    if (TBV[0] > TBV[1]){
+                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+                    }
+                }
             }
         }
         
         // select numerical scheme which has smaller TBV value
-        for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell
-            if (BVD_active[k][m][i] == 1){
-                W_L[0][m][i + 1] = W_L[1][m][i + 1];
-                W_R[0][m][i] = W_R[1][m][i];
+        for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
+                        Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                        Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                        W_x_L[0][m][Ixp] = W_x_L[1][m][Ixp];
+                        W_x_R[0][m][Ixm] = W_x_R[1][m][Ixm];
+                    }
+                }
             }
         }
     }
 }
 
-void eigen_vectors_Euler_cons_L_x(vec2d &q, int IL, int IR){
-    int m, xi;
-    double rhoL, rhoR, srL, srR, uL, uR, HL, HR, ub, Hb, cb, b1, b2, L_x[3][3];
-    vec2d q_copy = q;
+void BVD_selection_y(){
+    int i, j, k, m, Iym, Iyp;
+    double TBV[2];
+    int d = 1; // y-direction
     
-    // calculate Roe average
-    rhoL = U[k][0][IL];
-    rhoR = U[k][0][IR];
-    uL = U[k][1][IL] / rhoL;
-    uR = U[k][1][IR] / rhoR;
-    HL = gamma_ * U[k][2][IL] / rhoL - (gamma_ - 1.0) * 0.5 * uL * uL;
-    HR = gamma_ * U[k][2][IR] / rhoR - (gamma_ - 1.0) * 0.5 * uR * uR;
-    srL = sqrt(rhoL);
-    srR = sqrt(rhoR);
-    ub = (srL * uL + srR * uR) / (srL + srR);
-    Hb = (srL * HL + srR * HR) / (srL + srR);
-    cb = sqrt((gamma_ - 1.0) * (Hb - 0.5 * ub * ub));
-    
-    // calculate left eigenvectors
-    b2 = (gamma_ - 1.0) / (cb * cb);
-    b1 = 0.5 * ub * ub * b2;
-    L_x[0][0] = 0.5 * (b1 + ub / cb); L_x[0][1] = - 0.5 * (1.0 / cb + b2 * ub); L_x[0][2] = 0.5 * b2;
-    L_x[1][0] = 1.0 - b1;             L_x[1][1] = b2 * ub;                      L_x[1][2] = - b2;
-    L_x[2][0] = 0.5 * (b1 - ub / cb); L_x[2][1] = 0.5 * (1.0 / cb - b2 * ub);   L_x[2][2] = 0.5 * b2;
-    
-    // multiply stencil by left eigenvectors
-    for (xi = 0; xi < ns + 1; xi++){
-        for (m = 0; m < num_var; m++){
-            q[m][xi] = L_x[m][0] * q_copy[0][xi] + L_x[m][1] * q_copy[1][xi] + L_x[m][2] * q_copy[2][xi];
+    for (m = 0; m < num_var; m++){
+        // calculate TBV (Total Boundary Variation) and compare
+        for (j = ngy - BVD_s; j < ngy + ny + BVD_s; j++){ // each cell in y-direction
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                    Iym = I_y(i, j, k); // index of cell boundary at x_{i-1/2}
+                    Iyp = I_y(i, j + 1, k); // index of cell boundary at x_{i+1/2}
+                    TBV[0] = fabs(W_y_L[0][m][Iym] - W_y_R[0][m][Iym]) + fabs(W_y_L[0][m][Iyp] - W_y_R[0][m][Iyp]); // TBV of MUSCL
+                    TBV[1] = fabs(W_y_L[1][m][Iym] - W_y_R[1][m][Iym]) + fabs(W_y_L[1][m][Iyp] - W_y_R[1][m][Iyp]); // TBV of THINC
+                    if (TBV[0] > TBV[1]){
+                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+                    }
+                }
+            }
+        }
+        
+        // select numerical scheme which has smaller TBV value
+        for (j = ngy - BVD_s; j < ngy + ny + BVD_s; j++){ // each cell in y-direction
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
+                        Iym = I_y(i, j, k); // index of cell boundary at x_{i-1/2}
+                        Iyp = I_y(i, j + 1, k); // index of cell boundary at x_{i+1/2}
+                        W_y_L[0][m][Iyp] = W_y_L[1][m][Iyp];
+                        W_y_R[0][m][Iym] = W_y_R[1][m][Iym];
+                    }
+                }
+            }
         }
     }
 }
 
-void eigen_vectors_Euler_cons_R_x(int IL, int IR, int Ix){
-    int m;
-    double rhoL, rhoR, srL, srR, uL, uR, HL, HR, ub, Hb, cb, b1, b2, R_x[3][3];
-    double VL_copy[3], VR_copy[3];
+void BVD_selection_z(){
+    int i, j, k, m, Izm, Izp;
+    double TBV[2];
+    int d = 2; // z-direction
     
-    // calculate Roe average
-    rhoL = U[k][0][IL];
-    rhoR = U[k][0][IR];
-    uL = U[k][1][IL] / rhoL;
-    uR = U[k][1][IR] / rhoR;
-    HL = gamma_ * U[k][2][IL] / rhoL - (gamma_ - 1.0) * 0.5 * uL * uL;
-    HR = gamma_ * U[k][2][IR] / rhoR - (gamma_ - 1.0) * 0.5 * uR * uR;
-    srL = sqrt(rhoL);
-    srR = sqrt(rhoR);
-    ub = (srL * uL + srR * uR) / (srL + srR);
-    Hb = (srL * HL + srR * HR) / (srL + srR);
-    cb = sqrt((gamma_ - 1.0) * (Hb - 0.5 * ub * ub));
-    
-    // calculate right eigenvectors
-    R_x[0][0] = 1.0;          R_x[0][1] = 1.0;           R_x[0][2] = 1.0;
-    R_x[1][0] = ub - cb;      R_x[1][1] = ub;            R_x[1][2] = ub + cb;
-    R_x[2][0] = Hb - ub * cb; R_x[2][1] = 0.5 * ub * ub; R_x[2][2] = Hb + ub * cb;
-    
-    // multiply cell boundary values by right eigenvectors
     for (m = 0; m < num_var; m++){
-        VL_copy[m] = W_L[0][m][Ix];
-        VR_copy[m] = W_R[0][m][Ix];
-    }
-    for (m = 0; m < num_var; m++){
-        W_L[0][m][Ix] = (R_x[m][0] * VL_copy[0] + R_x[m][2] * VL_copy[2]) + R_x[m][1] * VL_copy[1];
-        W_R[0][m][Ix] = (R_x[m][0] * VR_copy[0] + R_x[m][2] * VR_copy[2]) + R_x[m][1] * VR_copy[1];
+        // calculate TBV (Total Boundary Variation) and compare
+        for (k = ngz - BVD_s; k < ngz + nz + BVD_s; k++){ // each cell in z-direction
+            for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                    Izm = I_z(i, j, k); // index of cell boundary at x_{i-1/2}
+                    Izp = I_z(i, j, k + 1); // index of cell boundary at x_{i+1/2}
+                    TBV[0] = fabs(W_z_L[0][m][Izm] - W_z_R[0][m][Izm]) + fabs(W_z_L[0][m][Izp] - W_z_R[0][m][Izp]); // TBV of MUSCL
+                    TBV[1] = fabs(W_z_L[1][m][Izm] - W_z_R[1][m][Izm]) + fabs(W_z_L[1][m][Izp] - W_z_R[1][m][Izp]); // TBV of THINC
+                    if (TBV[0] > TBV[1]){
+                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+                    }
+                }
+            }
+        }
+        
+        // select numerical scheme which has smaller TBV value
+        for (k = ngz - BVD_s; k < ngz + nz + BVD_s; k++){ // each cell in z-direction
+            for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
+                        Izm = I_z(i, j, k); // index of cell boundary at x_{i-1/2}
+                        Izp = I_z(i, j, k + 1); // index of cell boundary at x_{i+1/2}
+                        W_z_L[0][m][Izp] = W_z_L[1][m][Izp];
+                        W_z_R[0][m][Izm] = W_z_R[1][m][Izm];
+                    }
+                }
+            }
+        }
     }
 }
 
-void bvc_Euler_x(int b){
-    int i, m;
-    double rho_L_plus, rhou_L_plus, rhoE_L_plus, u_L_plus, p_L_plus, rho_R_minus, rhou_R_minus, rhoE_R_minus, u_R_minus, p_R_minus;
+// void bvc_Euler_x(int b){
+//     int i, m;
+//     double rho_L_plus, rhou_L_plus, rhoE_L_plus, u_L_plus, p_L_plus, rho_R_minus, rhou_R_minus, rhoE_R_minus, u_R_minus, p_R_minus;
     
-    for (i = ngx; i < ngx + nx; i++){
-        // conservative variables
-        rho_L_plus = W_L[b][0][i + 1]; rho_R_minus = W_R[b][0][i];
-        rhou_L_plus = W_L[b][1][i + 1]; rhou_R_minus = W_R[b][1][i];
-        rhoE_L_plus = W_L[b][2][i + 1]; rhoE_R_minus = W_R[b][2][i];
-        // primitive variables
-        u_L_plus = rhou_L_plus / rho_L_plus; u_R_minus = rhou_R_minus / rho_R_minus;
-        p_L_plus = (gamma_ - 1.0) * (rhoE_L_plus - 0.5 * rhou_L_plus * u_L_plus); p_R_minus = (gamma_ - 1.0) * (rhoE_R_minus - 0.5 * rhou_R_minus * u_R_minus);
-        if ((rho_L_plus <= 0. || p_L_plus <= 0.) || (rho_R_minus <= 0. || p_R_minus <= 0.)){
-            bvc_check = 1;
-            for (m = 0; m < num_var; m++) W_R[b][m][i] = W_L[b][m][i + 1] = U[b][m][i];
-        }
-    }
+//     for (i = ngx; i < ngx + nx; i++){
+//         // conservative variables
+//         rho_L_plus = W_L[b][0][i + 1]; rho_R_minus = W_R[b][0][i];
+//         rhou_L_plus = W_L[b][1][i + 1]; rhou_R_minus = W_R[b][1][i];
+//         rhoE_L_plus = W_L[b][2][i + 1]; rhoE_R_minus = W_R[b][2][i];
+//         // primitive variables
+//         u_L_plus = rhou_L_plus / rho_L_plus; u_R_minus = rhou_R_minus / rho_R_minus;
+//         p_L_plus = (gamma_ - 1.0) * (rhoE_L_plus - 0.5 * rhou_L_plus * u_L_plus); p_R_minus = (gamma_ - 1.0) * (rhoE_R_minus - 0.5 * rhou_R_minus * u_R_minus);
+//         if ((rho_L_plus <= 0. || p_L_plus <= 0.) || (rho_R_minus <= 0. || p_R_minus <= 0.)){
+//             bvc_check = 1;
+//             for (m = 0; m < num_var; m++) W_R[b][m][i] = W_L[b][m][i + 1] = U[b][m][i];
+//         }
+//     }
     
-    // conservative variables
-    rho_L_plus = W_L[b][0][ngx];
-    rhou_L_plus = W_L[b][1][ngx];
-    rhoE_L_plus = W_L[b][2][ngx];
-    // primitive variables
-    u_L_plus = rhou_L_plus / rho_L_plus;
-    p_L_plus = (gamma_ - 1.0) * (rhoE_L_plus - 0.5 * rhou_L_plus * u_L_plus);
-    if (rho_L_plus <= 0. || p_L_plus <= 0.){
-        bvc_check = 1;
-        for (m = 0; m < num_var; m++) W_L[b][m][ngx + 1] = U[b][m][ngx];
-    }
+//     // conservative variables
+//     rho_L_plus = W_L[b][0][ngx];
+//     rhou_L_plus = W_L[b][1][ngx];
+//     rhoE_L_plus = W_L[b][2][ngx];
+//     // primitive variables
+//     u_L_plus = rhou_L_plus / rho_L_plus;
+//     p_L_plus = (gamma_ - 1.0) * (rhoE_L_plus - 0.5 * rhou_L_plus * u_L_plus);
+//     if (rho_L_plus <= 0. || p_L_plus <= 0.){
+//         bvc_check = 1;
+//         for (m = 0; m < num_var; m++) W_L[b][m][ngx + 1] = U[b][m][ngx];
+//     }
     
-    // conservative variables
-    rho_R_minus = W_R[b][0][ngx + nx];
-    rhou_R_minus = W_R[b][1][ngx + nx];
-    rhoE_R_minus = W_R[b][2][ngx + nx];
-    // primitive variables
-    u_R_minus = rhou_R_minus / rho_R_minus;
-    p_R_minus = (gamma_ - 1.0) * (rhoE_R_minus - 0.5 * rhou_R_minus * u_R_minus);
-    if (rho_R_minus <= 0. || p_R_minus <= 0.){
-        bvc_check = 1;
-        for (m = 0; m < num_var; m++) W_R[b][m][ngx + nx] = U[b][m][ngx + nx];
-    }
+//     // conservative variables
+//     rho_R_minus = W_R[b][0][ngx + nx];
+//     rhou_R_minus = W_R[b][1][ngx + nx];
+//     rhoE_R_minus = W_R[b][2][ngx + nx];
+//     // primitive variables
+//     u_R_minus = rhou_R_minus / rho_R_minus;
+//     p_R_minus = (gamma_ - 1.0) * (rhoE_R_minus - 0.5 * rhou_R_minus * u_R_minus);
+//     if (rho_R_minus <= 0. || p_R_minus <= 0.){
+//         bvc_check = 1;
+//         for (m = 0; m < num_var; m++) W_R[b][m][ngx + nx] = U[b][m][ngx + nx];
+//     }
     
-}
+// }
 
 void Riemann_solver_Euler_HLLC(double *MWS_x){
     int i;
