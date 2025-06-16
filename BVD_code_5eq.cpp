@@ -14,6 +14,7 @@
 #include<vector>
 #include<valarray>
 #include<iomanip>
+#include<omp.h>
 
 #define eps 1.0e-15
 #define GNUPLOT "gnuplot -persist"
@@ -25,6 +26,8 @@ using std::isnan;
 using std::vector;
 using std::endl;
 using std::string;
+using std::min;
+using std::max;
 
 typedef std::vector<int> vec1i;
 typedef std::vector<vec1i> vec2i;
@@ -59,6 +62,7 @@ vec4i BVD_active; // record cells where MUSCL has been replaced by THINC
 vec3d W_x_L, W_x_R, W_y_L, W_y_R, W_z_L, W_z_R; // reconstructed left-side and right-side cell boundary value in x, y, z-direction
 int bvc_check; // flag for BVC (boundary value correction)
 vec2d F_x, F_y, F_z; // flux vector in x, y, z-direction
+vec2d Apdq_x, Amdq_x, Adq_x, Apdq_y, Amdq_y, Adq_y, Apdq_z, Amdq_z, Adq_z; // fluctuation in x, y, z-direction for wave-propagation method
 double CFL; // Courant number
 int rk, RK_stage; // stage number in Runge Kutta method
 vec2d RK_alpha; // coefficients of Runge Kutta method
@@ -66,21 +70,52 @@ vec1d RK_beta; // coefficients of Runge Kutta method
 
 double gamma_,gamma1,gamma2,pi1,pi2,eta1,eta2,eta1d,eta2d,Cv1,Cv2,Cp1,Cp2,As,Bs,Cs,Ds;
 double cB11,cB12,cB21,cB22,cE11,cE12,cE21,cE22,rho01,rho02,e01,e02;
+int sound_speed_type; // 1: system sound speed, 2: mixture-mixture sound speed
+
+int surface_tension_type; // 1: linear polynomial, 2: linear + filtering
+int order_grad_VOF; // order of gradient of VOF for surface tension calculation
+int ngx_CSF, ngy_CSF, ngz_CSF, NX_CSF, NY_CSF, NZ_CSF, NN_CSF; // number of ghost cells, total number of cells in x, y, z-direction for CSF
+double sigma_CSF;
+vec2d grad_VOF,normal_vec;
+vec1d curv;
+vec1d VOF_x_HLLC, VOF_y_HLLC, VOF_z_HLLC; // VOF value at cell center in x, y, z-direction derived from HLLC
+vec1d weight_filter, weight_sum_filter, curv_sum_filter;
+
+vec1d coef_Pn_D1_CC;
 
 void parameter();
+void EOS_param();
+void EOS_param_ref
+(
+    double *Gammak, double *p_refk, double *e_refk, 
+    double rhok, double gammak, double pik, double etak,
+    double cB1k, double cB2k, double cE1k, double cE2k, double rho0k, double e0k
+);
+double sound_speed_square
+(
+    double rhok, double pk,
+    double gammak, double pik, double etak,
+    double cB1k, double cB2k, double cE1k, double cE2k, double rho0k, double e0k
+);
 void initial_condition();
+void initial_condition_1D_GasLiquidRiemann();
+void initial_condition_2D_static_droplet();
+void prim_to_cons_5eq(double *alpha1rho1,double *alpha2rho2,double *rhou,double *rhov,double *rhow,double *rhoE,
+                  double alpha1,double rho1,double rho2,double u,double v,double w,double p);
+void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,double *p,
+                  double alpha1,double alpha1rho1,double alpha2rho2,double rhou,double rhov,double rhow,double rhoE);
 void initialize_BVD_active();
 void boundary_condition();
 void reconstruction();
-void eigen_vectors_Euler_cons_L_x(vec2d&, int, int);
 void MUSCL(double*, double*, const vec1d&);
 double Phi_MUSCL(double);
 void THINC(double*, double*, const vec1d&);
-void BVD_selection();
-void eigen_vectors_Euler_cons_R_x(int, int, int);
-void bvc_Euler_x(int);
-void Riemann_solver_Euler_HLLC(double*);
-void cal_dt(double);
+void BVD_selection_x();
+void BVD_selection_y();
+void BVD_selection_z();
+// void bvc_Euler_x(int);
+void Riemann_solver_5eq_HLLC(double*,double*,double*);
+void cal_dt(double,double,double);
 void update();
 void output_result();
 void plot_result();
@@ -91,6 +126,11 @@ inline int I_y(int, int, int);
 inline int I_z(int, int, int);
 double q2(double,double,double);
 double sum_cons3(double, double, double);
+double pow_int(double x,int n);
+void CSFmodel();
+void grad_VOF_cal();
+void curv_cal();
+void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n);
 
 int main(void){
     
@@ -99,9 +139,14 @@ int main(void){
     
     parameter();
     
+    // int num_threads = omp_get_max_threads(); // get maximum number of threads
+    int num_threads = 1; // set number of threads
+    omp_set_num_threads(num_threads); // set number of threads for OpenMP
+    
     initial_condition();
     
     t = 0.; t_step = 0; per = 1; dt_last = 0.; dt = 0.0; bvc_check = 0; // initialization
+    MWS_x = 0.0; MWS_y = 0.0; MWS_z = 0.0; // initialization of MWS (maximum wave speed)
     while (1){
         // adjust value of dt in final time step
         if (t + dt > t_end) dt_last = t_end - t;
@@ -115,8 +160,11 @@ int main(void){
             // interpolate cell boundary values
             reconstruction();
             
+            // calculate carvature for surface tension
+            CSFmodel();
+            
             // calculate numerical flux
-            Riemann_solver_5eq_HLLC(&MWS_x);
+            Riemann_solver_5eq_HLLC(&MWS_x, &MWS_y, &MWS_z);
             
             // update numerical solution
             cal_dt(MWS_x, MWS_y, MWS_z);
@@ -150,14 +198,25 @@ void parameter(){
     int i, j, k;
     
     // set benchmark test
-    cout << "Press number of benchmark test." << endl;
-    cout << "1: 2D static droplet problem" << endl;
-    cin >> problem_type;
-    
-    // set number of spatial dimension
-    if (problem_type == 1){
-        dim = 2;
+    cout << "Press number of dimension." << endl;
+    cout << "1: 1D, 2: 2D, 3: 3D" << endl;
+    cin >> dim;
+    if (dim < 1 || dim > 3){
+        cout << "Invalid dimension." << endl;
+        exit(0);
     }
+    
+    cout << "Press number of benchmark test." << endl;
+    if (dim == 1) {
+        cout << "1: 1D shock-tube problem" << endl;
+    }
+    else if (dim == 2) {
+        cout << "1: 2D static droplet problem" << endl;
+    }
+    else if (dim == 3) {
+        cout << "1: 3D static droplet problem" << endl;
+    }
+    cin >> problem_type;
     
     // set numerical scheme
     cout << "Press number of scheme." << endl;
@@ -172,6 +231,10 @@ void parameter(){
         exit(0);
     }
     
+    cout << "Press number of scheme for surface tension." << endl;
+    cout << "0: without surface tension, 1: linear polynomial, 2: linear + filtering" << endl;
+    cin >> surface_tension_type;
+    
     if (scheme_name == "MUSCL" || scheme_name == "THINC") BVD = 1; // number of cacndidate reconstruction schemes
     else if (scheme_name == "MUSCL-THINC-BVD") BVD = 2;
     
@@ -180,24 +243,59 @@ void parameter(){
     BVD_s = BVD - 1; // number of cells to be expanded outside the computational domain for the BVD scheme
     ns = 3; // number of cells in stencil for reconstruction
     ngx = 2 + BVD_s; // number of ghost cells for x-direction
-    if (dim>=2) ngy = ngx;
-    else        ngy = 0;
-    if (dim>=3) ngz = ngx;
-    else        ngz = 0;
+    ngy = ngx; // number of ghost cells for y-direction
+    ngz = ngx; // number of ghost cells for z-direction
     
-    // 2D static droplet problem
-    if (problem_type == 1){
-        nx = 100; // number of cell in x-direction in computational domain
-        ny = 100; // number of cell in y-direction in computational domain
-        nz = 1;   // number of cell in z-direction in computational domain
-        x_range[0] = -2.0; // x_coordinate at left boundary of computational domain
-        x_range[1] = 2.0; // x_coordinate at right boundary of computational domain
-        y_range[0] = -2.0; // y_coordinate at left boundary of computational domain
-        y_range[1] = 2.0; // y_coordinate at right boundary of computational domain
+    if (dim == 1){
+        // 1D shock-tube problem
+        if (problem_type == 1){
+            nx = 200; // number of cell in x-direction in computational domain
+            x_range[0] = -1.0; // x_coordinate at left boundary of computational domain
+            x_range[1] = 1.0; // x_coordinate at right boundary of computational domain
+            boundary_type = {1, 1}; // boundary condition type (1: outflow)
+            material = "water-air2_nondim"; // material name for equation of state
+            sound_speed_type = 1; // system sound speed
+        }
+        
+        else if (problem_type == 2){
+            
+        }
+        
+        ny = 1; // number of cell in y-direction in computational domain
+        ngy = 0; // number of ghost cells in y-direction
+        nz = 1; // number of cell in z-direction in computational domain
+        ngz = 0; // number of ghost cells in z-direction
+        y_range[0] = -0.5; // y_coordinate at left boundary of computational domain
+        y_range[1] = 0.5; // y_coordinate at right boundary of computational domain
         z_range[0] = -0.5; // z_coordinate at left boundary of computational domain
         z_range[1] = 0.5; // z_coordinate at right boundary of computational domain
-        boundary_type={1, 1, 1, 1, -1, -1};
-        material="water-air1_nondim";
+    }
+    else if (dim == 2){
+        // 2D static droplet problem
+        if (problem_type == 1){
+            nx = 100; // number of cell in x-direction in computational domain
+            ny = 100; // number of cell in y-direction in computational domain
+            x_range[0] = -2.0; // x_coordinate at left boundary of computational domain
+            x_range[1] = 2.0; // x_coordinate at right boundary of computational domain
+            y_range[0] = -2.0; // y_coordinate at left boundary of computational domain
+            y_range[1] = 2.0; // y_coordinate at right boundary of computational domain
+            boundary_type={1, 1, 1, 1, -1, -1};
+            material="water-air1_nondim"; // material name for equation of state
+            sound_speed_type = 1; // system sound speed
+        }
+        
+        else if (problem_type == 2){
+            
+        }
+        
+        nz = 1;   // number of cell in z-direction in computational domain
+        ngz = 0; // number of ghost cells in z-direction
+        z_range[0] = -0.5; // z_coordinate at left boundary of computational domain
+        z_range[1] = 0.5; // z_coordinate at right boundary of computational domain
+    }
+
+    else if (dim == 3){
+        
     }
     
     NX = nx + ngx * 2; // total number of cell in x-direction including ghost cell
@@ -246,19 +344,59 @@ void parameter(){
     if (dim >= 1){
         W_x_L = vec3d(BVD, vec2d(num_var, vec1d(NBX, 0.0))); // reconstructed left-side cell boundary value in x-direction
         W_x_R = vec3d(BVD, vec2d(num_var, vec1d(NBX, 0.0))); // reconstructed right-side cell boundary value in x-direction
-        F_x = vec2d(num_var, vec1d(NBX, 0.0)); // flux vector in x-direction
+        // F_x = vec2d(num_var, vec1d(NBX, 0.0)); // flux vector in x-direction
+        Apdq_x = vec2d(num_var, vec1d(NBX, 0.0)); // positive fluctuation in x-direction
+        Amdq_x = vec2d(num_var, vec1d(NBX, 0.0)); // negative fluctuation in x-direction
+        Adq_x = vec2d(num_var, vec1d(NN, 0.0)); // fluctuation in x-direction
     }
     if (dim >= 2){
         W_y_L = vec3d(BVD, vec2d(num_var, vec1d(NBY, 0.0))); // reconstructed left-side cell boundary value in y-direction
         W_y_R = vec3d(BVD, vec2d(num_var, vec1d(NBY, 0.0))); // reconstructed right-side cell boundary value in y-direction
-        F_y = vec2d(num_var, vec1d(NBY, 0.0)); // flux vector in y-direction
+        // F_y = vec2d(num_var, vec1d(NBY, 0.0)); // flux vector in y-direction
+        Apdq_y = vec2d(num_var, vec1d(NBY, 0.0)); // positive fluctuation in y-direction
+        Amdq_y = vec2d(num_var, vec1d(NBY, 0.0)); // negative fluctuation in y-direction
+        Adq_y = vec2d(num_var, vec1d(NN, 0.0)); // fluctuation in y-direction
     }
     if (dim >= 3){
         W_z_L = vec3d(BVD, vec2d(num_var, vec1d(NBZ, 0.0))); // reconstructed left-side cell boundary value in z-direction
         W_z_R = vec3d(BVD, vec2d(num_var, vec1d(NBZ, 0.0))); // reconstructed right-side cell boundary value in z-direction
-        F_z = vec2d(num_var, vec1d(NBZ, 0.0)); // flux vector in z-direction
+        // F_z = vec2d(num_var, vec1d(NBZ, 0.0)); // flux vector in z-direction
+        Apdq_z = vec2d(num_var, vec1d(NBZ, 0.0)); // positive fluctuation in z-direction
+        Amdq_z = vec2d(num_var, vec1d(NBZ, 0.0)); // negative fluctuation in z-direction
+        Adq_z = vec2d(num_var, vec1d(NN, 0.0)); // fluctuation in z-direction
     }
     BVD_active = vec4i(dim, vec3i(RK_stage, vec2i(num_var, vec1i(NN, 0)))); // record cells where MUSCL has been replaced by THINC
+    
+    // surface tension parameters
+    sigma_CSF=0.0;
+    order_grad_VOF=0;
+    if (surface_tension_type >= 1){
+        sigma_CSF=1.0; // surface tension coefficient
+        order_grad_VOF=2; // order of gradient of VOF for surface tension calculation
+        ngx_CSF=2; // number of ghost cells for CSF model in x-direction
+        if (dim >= 2) ngy_CSF=ngx_CSF; // number of ghost cells for CSF model in y-direction
+        else ngy_CSF=0; // number of ghost cells for CSF model in y-direction
+        if (dim >= 3) ngz_CSF=ngx_CSF; // number of ghost cells for CSF model in z-direction
+        else ngz_CSF=0; // number of ghost cells for CSF model in z-direction
+        NX_CSF=nx+ngx_CSF*2; // number of cell in x-direction including ghost cell for CSF
+        NY_CSF=ny+ngy_CSF*2; // number of cell in y-direction including ghost cell for CSF
+        NZ_CSF=nz+ngz_CSF*2; // number of cell in z-direction including ghost cell for CSF
+        NN_CSF=NX_CSF*NY_CSF*NZ_CSF; // total number of cell including ghost cell for CSF
+        grad_VOF=vec2d(3,vec1d(NN_CSF));
+        normal_vec=vec2d(4,vec1d(NN_CSF)); // 4:normal vector existence
+        curv=vec1d(NN_CSF);
+        coefficient_linear_polynoimal_1stDerivative_CellCenter(order_grad_VOF+1);
+        
+        // filtering for surface tension
+        if (surface_tension_type==2){
+            VOF_x_HLLC=vec1d(NBX,0.0);
+            VOF_y_HLLC=vec1d(NBY,0.0);
+            VOF_z_HLLC=vec1d(NBZ,0.0);
+            weight_filter=vec1d(NN,0.0);
+            weight_sum_filter=vec1d(NN,0.0);
+            curv_sum_filter=vec1d(NN_CSF);
+        }
+    }
     
     // for THINC scheme
     beta = 1.6; // gradient parameter
@@ -268,9 +406,17 @@ void parameter(){
 void EOS_param(){
     
     if (material=="water-air1_nondim"){
-        // EOS_type=2;
+        EOS_type=2;
         gamma1=4.4; gamma2=1.4;
         pi1=6000.0; pi2=0.0;
+        eta1=0.0; eta2=0.0;
+        eta1d=0.0; eta2d=0.0;
+        Cv1=0.0; Cv2=0.0;
+    }
+    else if (material=="water-air2_nondim"){
+        EOS_type=2;
+        gamma1=5.5; gamma2=1.4;
+        pi1=1.505; pi2=0.0;
         eta1=0.0; eta2=0.0;
         eta1d=0.0; eta2d=0.0;
         Cv1=0.0; Cv2=0.0;
@@ -330,7 +476,7 @@ double sound_speed_square
         double rho_ratio=rhok/rho0k;
         dGammak=0.0;
         dp_refk=(cE1k*cB1k*pow(rho_ratio,cE1k-1.0)-cE2k*cB2k*pow(rho_ratio,cE2k-1.0))/rho0k;
-        de_refk=(cB1k*pow(rho_ratio,cE1k-2.0)-cB2k*pow(rho_ratio,cE2k-2.0))/pow2(rho0k);
+        de_refk=(cB1k*pow(rho_ratio,cE1k-2.0)-cB2k*pow(rho_ratio,cE2k-2.0))/pow_int(rho0k,2);
     }
     cck=((Gammak+1.0)*pk-p_refk)/rhok+(pk-p_refk)/Gammak*dGammak+dp_refk-rhok*Gammak*de_refk;
     return cck;
@@ -338,11 +484,70 @@ double sound_speed_square
 
 void initial_condition(){
     
-    // 2D static droplet problem
-    if (problem_type == 1){
-        t_end = 0.25; // time to end calculation
-        initial_condition_2D_static_droplet();
+    if (dim == 1){
+        // 1D shock-tube problem
+        if (problem_type == 1){
+            t_end = 0.25; // time to end calculation
+            initial_condition_1D_GasLiquidRiemann();
+        }
+        else if (problem_type == 2){
+            
+        }
     }
+    else if (dim == 2){
+        // 2D static droplet problem
+        if (problem_type == 1){
+            t_end = 0.25; // time to end calculation
+            initial_condition_2D_static_droplet();
+        }
+    }
+    else if (dim == 3){
+        // 3D static droplet problem
+        if (problem_type == 1){
+            
+        }
+    }
+}
+
+void initial_condition_1D_GasLiquidRiemann(){
+    int i,j,k,Ic;
+    double alpha1,alpha1rho1,alpha2rho2,rhou,rhov,rhow,rhoE,rho1,rho2,u,v,w,p;
+    double x_border=0.0;
+    
+    for (i = ngx; i < ngx + nx; i++){
+        for (j = ngy; j < ngy + ny; j++){
+            for (k = ngz; k < ngz + nz; k++){
+                
+                if (xc[i]<x_border){
+                    alpha1=1.0e-6;
+                    rho1=0.991;
+                    rho2=1.241;
+                    u=v=w=0.0;
+                    p=2.753;
+                }
+                else {
+                    alpha1=1.0-1.0e-6;
+                    rho1=0.991;
+                    rho2=1.241;
+                    u=v=w=0.0;
+                    p=3.059e-4;
+                }
+                
+                prim_to_cons_5eq(&alpha1rho1,&alpha2rho2,&rhou,&rhov,&rhow,&rhoE,
+                            alpha1,rho1,rho2,u,v,w,p);
+                
+                Ic=I_c(i,j,k);
+                U[0][0][Ic]=alpha1;
+                U[0][1][Ic]=alpha1rho1;
+                U[0][2][Ic]=alpha2rho2;
+                U[0][3][Ic]=rhou;
+                U[0][4][Ic]=rhov;
+                U[0][5][Ic]=rhow;
+                U[0][6][Ic]=rhoE;
+            }
+        }
+    }
+    
 }
 
 void initial_condition_2D_static_droplet(){
@@ -422,7 +627,7 @@ void prim_to_cons_5eq(double *alpha1rho1,double *alpha2rho2,double *rhou,double 
 }
 
 void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,double *p,
-                  double alpha1,double alpha1rho1,double alpha2rho2,double rhou,double rhov,double rhow,double E){
+                  double alpha1,double alpha1rho1,double alpha2rho2,double rhou,double rhov,double rhow,double rhoE){
     double alpha2,rho_mix,udotu;
     double Gamma1,p_ref1,e_ref1,Gamma2,p_ref2,e_ref2,Gamma,p_ref,rhoe_ref;
     
@@ -434,13 +639,13 @@ void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,do
     *v=rhov/rho_mix;
     *w=rhow/rho_mix;
     udotu=q2(*u,*v,*w);
-    // *p=((E-0.5*rho_mix*udotu)-(alpha1rho1*eta1+alpha2rho2*eta2)-(alpha1*gamma1*pi1/(gamma1-1.0)+alpha2*gamma2*pi2/(gamma2-1.0)))/(alpha1/(gamma1-1.0)+alpha2/(gamma2-1.0));
+    // *p=((rhoE-0.5*rho_mix*udotu)-(alpha1rho1*eta1+alpha2rho2*eta2)-(alpha1*gamma1*pi1/(gamma1-1.0)+alpha2*gamma2*pi2/(gamma2-1.0)))/(alpha1/(gamma1-1.0)+alpha2/(gamma2-1.0));
     EOS_param_ref(&Gamma1,&p_ref1,&e_ref1,*rho1,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
     EOS_param_ref(&Gamma2,&p_ref2,&e_ref2,*rho2,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
     Gamma=1.0/(alpha1/Gamma1+alpha2/Gamma2);
     p_ref=(Gamma)*(alpha1*p_ref1/Gamma1+alpha2*p_ref2/Gamma2);
     rhoe_ref=alpha1rho1*e_ref1+alpha2rho2*e_ref2;
-    *p=p_ref+Gamma*((E-0.5*rho_mix*udotu)-rhoe_ref);
+    *p=p_ref+Gamma*((rhoE-0.5*rho_mix*udotu)-rhoe_ref);
 }
 
 void initialize_BVD_active(){
@@ -462,13 +667,62 @@ void initialize_BVD_active(){
 }
 
 void boundary_condition(){
-    int i, m;
+    int i, j, k, m, Ic, Ic_ref;
     
-    // outflow condition
-    for (i = 0; i < ngx; i++){
-        for (m = 0; m < num_var; m++){
-            U[rk][m][i] = U[rk][m][ngx];
-            U[rk][m][NX - 1 - i] = U[rk][m][nx + ngx - 1];
+    // boundary condition in x-direction
+    if (dim >= 1){
+        for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (i = 0; i < ngx; i++){ // ghost cells in x-direction
+                    
+                    // negative side from x_range[0]
+                    Ic = I_c(i, j, k);
+                    if (boundary_type[0] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(ngx, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[0] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(ngx * 2 - 1 - i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                        U[rk][3][Ic] = -U[rk][3][Ic]; // invert velocity component
+                    }
+                    else if (boundary_type[0] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(nx + i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[0] == 4){ //
+                        
+                    }
+                    
+                    // positive side from x_range[1]
+                    Ic = I_c(NX - 1 - i, j, k);
+                    if (boundary_type[1] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(nx + ngx - 1, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[1] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(nx + i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                        U[rk][3][Ic] = -U[rk][3][Ic]; // invert velocity component
+                    }
+                    else if (boundary_type[1] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(ngx * 2 - 1 - i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -763,146 +1017,445 @@ void BVD_selection_z(){
     
 // }
 
-void Riemann_solver_Euler_HLLC(double *MWS_x){
-    int i;
-    double mws_x = 0.0;
+void Riemann_solver_5eq_HLLC(double *MWS_x, double *MWS_y, double *MWS_z){
+    int i,j,k,m;
+    double mws_x=0.0, mws_y=0.0, mws_z=0.0;
     
-    double rho_L, rhou_L, rhoE_L, u_L, p_L, c_L, rho_R, rhou_R, rhoE_R, u_R, p_R, c_R;
-    double f_rho_L, f_rhou_L, f_rhoE_L, f_rho_R, f_rhou_R, f_rhoE_R;
-    double rho_bar, c_bar, p_star, rho_star, q_L, q_R;
-    double S_L, S_R, S_star;
-    double rho_Lstar, rhou_Lstar, rhoE_Lstar, rho_Rstar, rhou_Rstar, rhoE_Rstar;
-    double S_ratio_L, S_ratio_R;
-    double S_star_plus, S_star_minus, S_L_minus, S_R_plus;
-    
-    for (i = ngx; i < ngx + nx + 1; i++){ // each cell boundary
-        // conservative variables
-        rho_L = W_L[0][0][i]; rho_R = W_R[0][0][i];
-        rhou_L = W_L[0][1][i]; rhou_R = W_R[0][1][i];
-        rhoE_L = W_L[0][2][i]; rhoE_R = W_R[0][2][i];
-        // primitive variables
-        u_L = rhou_L / rho_L; u_R = rhou_R / rho_R;
-        p_L = (gamma_ - 1.0) * (rhoE_L - 0.5 * rhou_L * u_L); p_R = (gamma_ - 1.0) * (rhoE_R - 0.5 * rhou_R * u_R);
-        c_L = sqrt(gamma_ * p_L / rho_L); c_R = sqrt(gamma_ * p_R / rho_R);
-        // flux
-        f_rho_L = rhou_L; f_rho_R = rhou_R;
-        f_rhou_L = rhou_L * u_L + p_L; f_rhou_R = rhou_R * u_R + p_R;
-        f_rhoE_L = (rhoE_L + p_L) * u_L; f_rhoE_R = (rhoE_R + p_R) * u_R;
+    //  Riemann solver in x-direction
+    if (dim>=1){
+        #pragma omp parallel
+        {
+            int Ix, Ixm, Ixp, Ic;
+            double alpha1_L, alpha2_L, rho1_L, rho2_L, u_L, v_L, w_L, S_L, Y1_L, rho_L, p_L, c_L, S_ratio_L;
+            double alpha1rho1_L, alpha2rho2_L, rhou_L, rhov_L, rhow_L, rhoE_L, cc1_L, cc2_L;
+            vec1d U_L(num_var), F_L(num_var), U_Lstar(num_var);
+            double alpha1_R, alpha2_R, rho1_R, rho2_R, u_R, v_R, w_R, S_R, Y1_R, rho_R, p_R, c_R, S_ratio_R;
+            double alpha1rho1_R, alpha2rho2_R, rhou_R, rhov_R, rhow_R, rhoE_R, cc1_R, cc2_R;
+            vec1d U_R(num_var), F_R(num_var), U_Rstar(num_var);
+            double S_star;
+            
+            double S_L_plus, S_L_minus, S_s_plus, S_s_minus, S_R_plus, S_R_minus;
+            
+            double W1, W2, W3;
+            double kappa;
+            
+            // calculate fluctuation at cell boundary
+            #pragma omp for private(j,k,m) reduction(max:mws_x)
+            for (i=ngx;i<ngx+nx+1;i++){ // each cell boundary in x-direction
+                for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
+                    for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+                        Ix=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
+                        
+                        // left-side cell boundary value
+                        alpha1_L=W_x_L[0][0][Ix];
+                        alpha2_L=1.0-alpha1_L;
+                        rho1_L=W_x_L[0][1][Ix];
+                        rho2_L=W_x_L[0][2][Ix];
+                        u_L=W_x_L[0][3][Ix];
+                        v_L=W_x_L[0][4][Ix];
+                        w_L=W_x_L[0][5][Ix];
+                        p_L=W_x_L[0][6][Ix];
+                        // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
+                        //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
+                        prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
+                                        alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
+                        rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
+                        Y1_L=alpha1_L*rho1_L/rho_L;
+                        if (sound_speed_type==1){
+                            // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
+                            // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
+                            // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
+                            cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                            cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                            // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                            c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                        }
+                        else if (sound_speed_type==2){
+                            double gamma=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
+                            double p_ref=(gamma-1.0)/gamma*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
+                            c_L=sqrt(gamma*(p_L+p_ref)/rho_L);
+                        }
+                        // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
+                        if (isnan(c_L) && 0){
+                            printf("c_L is nan @HLLC_x\n");
+                            printf("t=%f, t_step=%d, cell boundary:(%d-%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,i-ngx,i+1-ngx,j-ngy,k-ngz,alpha1_L,alpha2_L,p_L,rho_L);
+                            getchar();
+                        }
+                        
+                        // right-side cell boundary value
+                        alpha1_R=W_x_R[0][0][Ix];
+                        alpha2_R=1.0-alpha1_R;
+                        rho1_R=W_x_R[0][1][Ix];
+                        rho2_R=W_x_R[0][2][Ix];
+                        u_R=W_x_R[0][3][Ix];
+                        v_R=W_x_R[0][4][Ix];
+                        w_R=W_x_R[0][5][Ix];
+                        p_R=W_x_R[0][6][Ix];
+                        // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
+                        //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
+                        prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
+                                        alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
+                        //
+                        rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
+                        Y1_R=alpha1_R*rho1_R/rho_R;
+                        if (sound_speed_type==1){
+                            // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
+                            // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
+                            // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
+                            cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                            cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                            // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                            c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                        }
+                        else if (sound_speed_type==2){
+                            double gamma=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
+                            double p_ref=(gamma-1.0)/gamma*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
+                            c_R=sqrt(gamma*(p_R+p_ref)/rho_R);
+                        }
+                        // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
+                        if (isnan(c_R) && 0){
+                            printf("c_R is nan @HLLC_x\n");
+                            printf("t=%f, t_step=%d, cell boundary:(%d-%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,i-ngx,i+1-ngx,j-ngy,k-ngz,alpha1_R,alpha2_R,p_R,rho_R);
+                            getchar();
+                        }
+                        
+                        // curvature at the cell boundary
+                        if (surface_tension_type>=1) kappa=0.5*(curv[I_c(i-1,j,k)]+curv[I_c(i,j,k)]);
+                        else kappa=0.0;
+                        
+                        // Direct Wave Speed Estimates
+                        // S_L=min(u_L-c_L,u_R-c_R);
+                        // S_R=max(u_L+c_L,u_R+c_R);
+                        S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
+                        S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
+                        if (isnan(S_L) || isnan(S_R)) {
+                            printf("SLR nan@xb"); getchar();
+                        }
+                        
+                        // Max Wave Speed
+                        mws_x=max({mws_x,fabs(S_L),fabs(S_R)});
 
-        // PVRS (Primitive Variable Riemann Solver)
-        rho_bar = 0.5 * (rho_L + rho_R);
-        c_bar = 0.5 * (c_L + c_R);
-        p_star = fmax(0.0, 0.5 * (p_L + p_R) - 0.5 * (u_R - u_L) * rho_bar * c_bar);
-        if (p_star < p_L) q_L = 1.0;
-        else q_L = sqrt(1.0 + (gamma_ + 1.0) / (2.0 * gamma_) * (p_star / p_L - 1.0));
-        S_L = u_L - c_L * q_L;
-        if (p_star < p_R) q_R = 1.0;
-        else q_R = sqrt(1.0 + (gamma_ + 1.0) / (2.0 * gamma_) * (p_star / p_R-1.0));
-        S_R = u_R + c_R * q_R;
-        
-        // Max Wave Speed
-        mws_x = fmax(mws_x, fmax(fabs(S_L), fabs(S_R)));
+                        // contact discontinuity speed
+                        S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
+                                /
+                                (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
 
-        // speed of contact discontinuity
-        S_star = ((p_R - p_L) + (rho_L * u_L * (S_L - u_L) - rho_R * u_R * (S_R - u_R)))
-                  /
-                  (rho_L * (S_L - u_L) - rho_R * (S_R - u_R));
+                        // HLLC solution
+                        U_L[0]=alpha1_L;
+                        U_L[1]=alpha1_L*rho1_L;
+                        U_L[2]=alpha2_L*rho2_L;
+                        U_L[3]=rho_L*u_L;
+                        U_L[4]=rho_L*v_L;
+                        U_L[5]=rho_L*w_L;
+                        U_L[6]=rhoE_L;
+                        F_L[0]=alpha1_L*u_L;
+                        F_L[1]=alpha1_L*rho1_L*u_L;
+                        F_L[2]=alpha2_L*rho2_L*u_L;
+                        F_L[3]=p_L+rho_L*u_L*u_L;
+                        F_L[4]=rho_L*v_L*u_L;
+                        F_L[5]=rho_L*w_L*u_L;
+                        F_L[6]=(rhoE_L+p_L)*u_L;
+                        S_ratio_L=(S_L-u_L)/(S_L-S_star);
+                        U_Lstar[0]=alpha1_L;
+                        U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
+                        U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
+                        U_Lstar[3]=rho_L*S_star*S_ratio_L;
+                        U_Lstar[4]=rho_L*v_L*S_ratio_L;
+                        U_Lstar[5]=rho_L*w_L*S_ratio_L;
+                        U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
+                        
+                        U_R[0]=alpha1_R;
+                        U_R[1]=alpha1_R*rho1_R;
+                        U_R[2]=alpha2_R*rho2_R;
+                        U_R[3]=rho_R*u_R;
+                        U_R[4]=rho_R*v_R;
+                        U_R[5]=rho_R*w_R;
+                        U_R[6]=rhoE_R;
+                        F_R[0]=alpha1_R*u_R;
+                        F_R[1]=alpha1_R*rho1_R*u_R;
+                        F_R[2]=alpha2_R*rho2_R*u_R;
+                        F_R[3]=p_R+rho_R*u_R*u_R;
+                        F_R[4]=rho_R*v_R*u_R;
+                        F_R[5]=rho_R*w_R*u_R;
+                        F_R[6]=(rhoE_R+p_R)*u_R;
+                        S_ratio_R=(S_R-u_R)/(S_R-S_star);
+                        U_Rstar[0]=alpha1_R;
+                        U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
+                        U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
+                        U_Rstar[3]=rho_R*S_star*S_ratio_R;
+                        U_Rstar[4]=rho_R*v_R*S_ratio_R;
+                        U_Rstar[5]=rho_R*w_R*S_ratio_R;
+                        U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
 
-        // conservative variables at intermediate region
-        S_ratio_L = (S_L - u_L) / (S_L - S_star); S_ratio_R = (S_R - u_R) / (S_R - S_star);
-        rho_Lstar = rho_L * S_ratio_L;
-        rho_Rstar = rho_R * S_ratio_R;
-        rhou_Lstar = rho_Lstar * S_star;
-        rhou_Rstar = rho_Rstar * S_star;
-        rhoE_Lstar = rho_Lstar * (rhoE_L / rho_L + (S_star - u_L) * (S_star + p_L / rho_L / (S_L - u_L)));
-        rhoE_Rstar = rho_Rstar * (rhoE_R / rho_R + (S_star - u_R) * (S_star + p_R / rho_R / (S_R - u_R)));
+                        // calculate fluctuation at cell boundary
+                        S_L_plus=max(S_L,0.0);
+                        S_L_minus=min(S_L,0.0);
+                        S_s_plus=max(S_star,0.0);
+                        S_s_minus=min(S_star,0.0);
+                        S_R_plus=max(S_R,0.0);
+                        S_R_minus=min(S_R,0.0);
+                        for (m=0;m<num_var;m++){
+                            W1=U_Lstar[m]-U_L[m];
+                            W2=U_Rstar[m]-U_Lstar[m];
+                            W3=U_R[m]-U_Rstar[m];
+                            Apdq_x[m][Ix] = (S_L_plus * W1 + S_R_plus * W3) + S_s_plus * W2;
+                            Amdq_x[m][Ix] = (S_L_minus * W1 + S_R_minus * W3) + S_s_minus * W2;
+                        }
+                    }
+                }
+            }
+            
+            // calculate fluctuation at cell inside
+            #pragma omp for private(j,k,m)
+            for (i=ngx;i<ngx+nx;i++){ // each cell in x-direction
+                for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
+                    for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+                        Ixm=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
+                        Ixp=I_x(i+1,j,k); // index of cell boundary at x_{i+1/2}
+                        // Adq=s(1)W(1)+s(2)W(2)+s(3)W(3)
+                        
+                        // left-side cell boundary value
+                        alpha1_L=W_x_R[0][0][Ixm];
+                        alpha2_L=1.0-alpha1_L;
+                        rho1_L=W_x_R[0][1][Ixm];
+                        rho2_L=W_x_R[0][2][Ixm];
+                        u_L=W_x_R[0][3][Ixm];
+                        v_L=W_x_R[0][4][Ixm];
+                        w_L=W_x_R[0][5][Ixm];
+                        p_L=W_x_R[0][6][Ixm];
+                        // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
+                        //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
+                        prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
+                            alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
+                        rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
+                        Y1_L=alpha1_L*rho1_L/rho_L;
+                        if (sound_speed_type==1){
+                            // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
+                            // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
+                            // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
+                            cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                            cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                            c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                            // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                        }
+                        else if (sound_speed_type==2){
+                            double gamma=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
+                            double p_ref=(gamma-1.0)/gamma*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
+                            c_L=sqrt(gamma*(p_L+p_ref)/rho_L);
+                        }
+                        // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
+                        
+                        // right-side cell boundary value
+                        alpha1_R=W_x_L[0][0][Ixp];
+                        alpha2_R=1.0-alpha1_R;
+                        rho1_R=W_x_L[0][1][Ixp];
+                        rho2_R=W_x_L[0][2][Ixp];
+                        u_R=W_x_L[0][3][Ixp];
+                        v_R=W_x_L[0][4][Ixp];
+                        w_R=W_x_L[0][5][Ixp];
+                        p_R=W_x_L[0][6][Ixp];
+                        // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
+                        //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
+                        prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
+                            alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
+                        rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
+                        Y1_R=alpha1_R*rho1_R/rho_R;
+                        if (sound_speed_type==1){
+                            // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
+                            // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
+                            // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
+                            cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                            cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                            c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                            // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                        }
+                        else if (sound_speed_type==2){
+                            double gamma=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
+                            double p_ref=(gamma-1.0)/gamma*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
+                            c_R=sqrt(gamma*(p_R+p_ref)/rho_R);
+                        }
+                        // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
+                        
+                        if (surface_tension_type>=1) kappa=curv[I_c(i,j,k)];
+                        else kappa=0.0;
+                        
+                        // Direct Wave Speed Estimates
+                        // S_L=min(u_L-c_L,u_R-c_R);
+                        // S_R=max(u_L+c_L,u_R+c_R);
+                        S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
+                        S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
+                        if (isnan(S_L) || isnan(S_R)) {
+                            printf("SLR nan@xc"); getchar();
+                        }
+                        
+                        // Maximum Wave Speed
+                        // if (mwsx<max(fabs(S_L),fabs(S_R))){
+                        //     mwsx=max(fabs(S_L),fabs(S_R));
+                        // }
 
-        // calculate flux
-        S_star_plus = 0.5 * (1.0 + sign(S_star));
-        S_star_minus = 0.5 * (1.0 - sign(S_star));
-        S_L_minus = fmin(S_L , 0.0);
-        S_R_plus = fmax(S_R , 0.0);
-        F[0][i] = S_star_plus * (f_rho_L + S_L_minus * (rho_Lstar - rho_L))
-                 + S_star_minus * (f_rho_R + S_R_plus * (rho_Rstar - rho_R));
-        F[1][i] = S_star_plus * (f_rhou_L + S_L_minus * (rhou_Lstar - rhou_L))
-                 + S_star_minus * (f_rhou_R + S_R_plus * (rhou_Rstar - rhou_R));
-        F[2][i] = S_star_plus * (f_rhoE_L + S_L_minus * (rhoE_Lstar - rhoE_L))
-                 + S_star_minus * (f_rhoE_R + S_R_plus * (rhoE_Rstar - rhoE_R));
+                        // contact discontinuity speed
+                        S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
+                                /
+                                (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
+
+                        // HLLC solution
+                        U_L[0]=alpha1_L;
+                        U_L[1]=alpha1_L*rho1_L;
+                        U_L[2]=alpha2_L*rho2_L;
+                        U_L[3]=rho_L*u_L;
+                        U_L[4]=rho_L*v_L;
+                        U_L[5]=rho_L*w_L;
+                        U_L[6]=rhoE_L;
+                        S_ratio_L=(S_L-u_L)/(S_L-S_star);
+                        U_Lstar[0]=alpha1_L;//*S_ratio_L;
+                        U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
+                        U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
+                        U_Lstar[3]=rho_L*S_star*S_ratio_L;
+                        U_Lstar[4]=rho_L*v_L*S_ratio_L;
+                        U_Lstar[5]=rho_L*w_L*S_ratio_L;
+                        U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
+                        
+                        U_R[0]=alpha1_R;
+                        U_R[1]=alpha1_R*rho1_R;
+                        U_R[2]=alpha2_R*rho2_R;
+                        U_R[3]=rho_R*u_R;
+                        U_R[4]=rho_R*v_R;
+                        U_R[5]=rho_R*w_R;
+                        U_R[6]=rhoE_R;
+                        S_ratio_R=(S_R-u_R)/(S_R-S_star);
+                        U_Rstar[0]=alpha1_R;//*S_ratio_R;
+                        U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
+                        U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
+                        U_Rstar[3]=rho_R*S_star*S_ratio_R;
+                        U_Rstar[4]=rho_R*v_R*S_ratio_R;
+                        U_Rstar[5]=rho_R*w_R*S_ratio_R;
+                        U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
+                        
+                        // calculate fluctuation at cell inside
+                        Ic = I_c(i,j,k); // index of cell
+                        for (m=0;m<num_var;m++){
+                            W1=U_Lstar[m]-U_L[m];
+                            W2=U_Rstar[m]-U_Lstar[m];
+                            W3=U_R[m]-U_Rstar[m];
+                            Adq_x[m][Ic]=(S_L*W1+S_R*W3)+S_star*W2;
+                        }
+                    }
+                }
+            }
+        }
+        *MWS_x = mws_x;
     }
-    *MWS_x = mws_x;
+    
+    
 }
 
-void cal_dt(double MWS_x){
+void cal_dt(double MWS_x, double MWS_y, double MWS_z){
     
     // calculate dt
     if (dt_last > 0.0){
         dt = dt_last;
     }
     else {
-        dt = CFL * dx / (MWS_x + eps);
+        dt = CFL / (MWS_x / dx + MWS_y / dy + MWS_z / dz + eps);
     }
 }
 
 void update(){
-    int i, m, s, k_next = (k + 1) % RK_stage;
+    int i, j, k, m, Ic, Ixm, Ixp, Iym, Iyp, Izm, Izp, s, rk_next = (rk + 1) % RK_stage;
     double L, rho, rhou, rhoE, u, p;
     
-    for (i = ngx; i < ngx + nx; i++){
-        for (m = 0; m < num_var; m++){
-            // calculate spatial discrete operator
-            L = -(F[m][i + 1] - F[m][i]) / dx;
-            
-            // obtain numerical solution at next sub-step in Runge Kutta method
-            U[k_next][m][i] = RK_alpha[k][0] * U[0][m][i];
-            for (s = 1; s <= k; s++){
-                U[k_next][m][i] += RK_alpha[k][s] * U[s][m][i];
+    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+        for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                Ic = I_c(i, j, k); // index of cell
+                Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                Iym = I_y(i, j, k); // index of cell boundary at y_{j-1/2}
+                Iyp = I_y(i, j + 1, k); // index of cell boundary at y_{j+1/2}
+                Izm = I_z(i, j, k); // index of cell boundary at z_{k-1/2}
+                Izp = I_z(i, j, k + 1); // index of cell boundary at z_{k+1/2}
+                
+                for (m = 0; m < num_var; m++){
+                    // calculate spatial discrete operator
+                    // L = -(F_x[m][i + 1] - F_x[m][i]) / dx;
+                    if (dim == 1) L = -((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx;
+                    if (dim == 2) L = -((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx
+                                      -((Amdq_y[m][Iyp] + Apdq_y[m][Iym]) + Adq_y[m][Ic]) / dy;
+                    if (dim == 3) L = sum_cons3(-((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx,
+                                                -((Amdq_y[m][Iyp] + Apdq_y[m][Iym]) + Adq_y[m][Ic]) / dy,
+                                                -((Amdq_z[m][Izp] + Apdq_z[m][Izm]) + Adq_z[m][Ic]) / dz);
+                                    
+                    // obtain numerical solution at next sub-step in Runge Kutta method
+                    U[rk_next][m][Ic] = RK_alpha[rk][0] * U[0][m][Ic];
+                    for (s = 1; s <= rk; s++){
+                        U[rk_next][m][Ic] += RK_alpha[rk][s] * U[s][m][Ic];
+                    }
+                    U[rk_next][m][Ic] += RK_beta[rk] * L * dt;
+                }
+                
+                // check positivity
+                // rho = U[rk_next][0][Ic];
+                // rhou = U[rk_next][1][Ic];
+                // rhoE = U[rk_next][2][Ic];
+                // u = rhou / rho;
+                // p = (gamma_ - 1.0) * (rhoE - 0.5 * rho * u * u);
+                // if (rho <= 0.0 || p <= 0.0){
+                //     cout << "rho or p < 0" << endl;
+                //     cout << "rho = " << rho << ", p = " << p << endl;
+                //     getchar();
+                // }
             }
-            U[k_next][m][i] += RK_beta[k] * L * dt;
-        }
-        
-        // check positivity
-        rho = U[k_next][0][i];
-        rhou = U[k_next][1][i];
-        rhoE = U[k_next][2][i];
-        u = rhou / rho;
-        p = (gamma_ - 1.0) * (rhoE - 0.5 * rho * u * u);
-        if (rho <= 0.0 || p <= 0.0){
-            cout << "rho or p < 0" << endl;
-            cout << "rho = " << rho << ", p = " << p << endl;
-            getchar();
         }
     }
 }
 
 void output_result(){
-    int i, m;
-    double rho, rhou, rhoE, u, p;
+    int i, j, k, m, Ic, d;
+    double alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE, rho1, rho2, u, v, w, p, rho;
     int BVD_func;
     
     std::ofstream file_result("./result.csv");
         
-    for (i = 0; i < nx; i++){
-        
-        rho = U[0][0][ngx + i];
-        rhou = U[0][1][ngx + i];
-        rhoE = U[0][2][ngx + i];
-        u = rhou / rho;
-        p = (gamma_ - 1.0) * (rhoE - 0.5 * rhou * u);
-        
-        file_result << std::setprecision(15);
-        file_result << xc[i]<<" ";
-        file_result
-            << rho << " "
-            << u << " "
-            << p << " ";
-        BVD_func = 0;
-        for (k = 0; k < RK_stage; k++){
-            for (m = 0; m < num_var; m++){
-                BVD_func = fmax(BVD_func, BVD_active[k][m][ngx + i]);
+    for (i = ngx; i < ngx + nx; i++){
+        for (j = ngy; j < ngy + ny; j++){
+            for (k = ngz; k < ngz + nz; k++){
+                // index of cell
+                Ic = I_c(i, j, k);
+                
+                alpha1 = U[0][0][Ic];
+                alpha1rho1 = U[0][1][Ic];
+                alpha2rho2 = U[0][2][Ic];
+                rhou = U[0][3][Ic];
+                rhov = U[0][4][Ic];
+                rhow = U[0][5][Ic];
+                rhoE = U[0][6][Ic];
+                
+                cons_to_prim_5eq(&rho1,&rho2,&u,&v,&w,&p,
+                                alpha1,alpha1rho1,alpha2rho2,rhou,rhov,rhow,rhoE);
+                
+                file_result << std::setprecision(15);
+                file_result << xc[i] << " " << yc[j] << " " << zc[k] << " ";
+                file_result
+                    << alpha1 << " "
+                    << rho1 << " "
+                    << rho2 << " "
+                    << u << " "
+                    << v << " "
+                    << w << " "
+                    << p << " "
+                    << rho << " ";
+                BVD_func = 0;
+                for (d = 0; d < dim; d++){
+                    for (rk = 0; rk < RK_stage; rk++){
+                        for (m = 0; m < num_var; m++){
+                            BVD_func = fmax(BVD_func, BVD_active[d][rk][m][Ic]);
+                        }
+                    }
+                }
+                file_result << BVD_func << " ";
+                file_result << "\n";
             }
         }
-        file_result << BVD_func << " ";
-        file_result << "\n";
     }
     
     file_result.close();
@@ -1028,4 +1581,431 @@ double sum_cons3(double a, double b, double c){
         sum=a+b+c;
     }
     return sum;
+}
+
+double pow_int(double x,int n){
+    double xn=x;
+    for (int i=0;i<n-1;i++){
+        xn=xn*x;
+    }
+    return xn;
+}
+
+void CSFmodel(){
+    if (surface_tension_type == 1 || surface_tension_type == 2){
+        grad_VOF_cal();
+        curv_cal();
+    }
+}
+
+void grad_VOF_cal(){
+    // int i,j,k,xi,kc,Ic;
+    // int nsc=order_grad_VOF+1;
+    // int smoothing=1;
+    // double alpha=0.1;
+    
+    // //x方向の再構築
+    // if (dim>=1){
+    //     #pragma omp parallel
+    //     {
+    //         vec1d stn(nsc); //ステンシル
+            
+    //         #pragma omp for private(j,k,Ic,xi,kc)
+    //         for (i=ng;i<ng+nx;i++){ //各セル
+    //             for (j=ng;j<ng+ny;j++){ //各セル
+    //                 for (k=ng;k<ng+nz;k++){ //各セル
+    //                     Ic=I(i,j,k);
+                        
+    //                     for (xi=0;xi<nsc;xi++){
+    //                         stn[xi]=U[k_RK][0][I(i-(nsc-1)/2+xi,j,k)]; //セルを中心としてステンシルを計算
+    //                         if (smoothing) stn[xi]=pow(stn[xi],alpha)/(pow(stn[xi],alpha)+pow(1.0-stn[xi],alpha));
+    //                     }
+                        
+    //                     //セル中心における勾配値を計算
+    //                     grad_VOF[0][Ic]=0.0;
+                        
+    //                     for (kc=0;kc<(nsc-1)/2;kc++){
+    //                         grad_VOF[0][Ic]+=(coef_Pn_D1_CC[kc]*stn[kc]+coef_Pn_D1_CC[nsc-1-kc]*stn[nsc-1-kc]);
+    //                     }
+    //                     grad_VOF[0][Ic]+=coef_Pn_D1_CC[(nsc-1)/2]*stn[(nsc-1)/2];
+
+    //                     // for (kc=0;kc<nsc;kc++){
+    //                     //     grad_VOF[0][Ic]+=coef_Pn_D1_CC[kc]*stn[kc];
+    //                     // }
+                        
+    //                     grad_VOF[0][Ic]/=dx;
+                        
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+    
+    // //y方向の再構築
+    // if (dim>=2){
+    //     #pragma omp parallel
+    //     {
+    //         vec1d stn(nsc); //ステンシル
+            
+    //         #pragma omp for private(k,i,Ic,xi,kc)
+    //         for (j=ng;j<ng+ny;j++){ //各セル
+    //             for (k=ng;k<ng+nz;k++){ //各セル
+    //                 for (i=ng;i<ng+nx;i++){ //各セル
+    //                     Ic=I(i,j,k);
+                        
+    //                     for (xi=0;xi<nsc;xi++){
+    //                         stn[xi]=U[k_RK][0][I(i,j-(nsc-1)/2+xi,k)]; //セルを中心としてステンシルを計算
+    //                         if (smoothing) stn[xi]=pow(stn[xi],alpha)/(pow(stn[xi],alpha)+pow(1.0-stn[xi],alpha));
+    //                     }
+                        
+    //                     //セル中心における勾配値を計算
+    //                     grad_VOF[1][Ic]=0.0;
+                        
+    //                     for (kc=0;kc<(nsc-1)/2;kc++){
+    //                         grad_VOF[1][Ic]+=(coef_Pn_D1_CC[kc]*stn[kc]+coef_Pn_D1_CC[nsc-1-kc]*stn[nsc-1-kc]);
+    //                     }
+    //                     grad_VOF[1][Ic]+=coef_Pn_D1_CC[(nsc-1)/2]*stn[(nsc-1)/2];
+
+    //                     // for (kc=0;kc<nsc;kc++){
+    //                     //     grad_VOF[1][Ic]+=coef_Pn_D1_CC[kc]*stn[kc];
+    //                     // }
+                        
+    //                     grad_VOF[1][Ic]/=dy;
+                        
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+    
+    // //z方向の再構築
+    // if (dim>=3){
+    //     #pragma omp parallel
+    //     {
+    //         vec1d stn(nsc); //ステンシル
+            
+    //         #pragma omp for private(i,j,Ic,xi,kc)
+    //         for (k=ng;k<ng+nz;k++){ //各セル
+    //             for (i=ng;i<ng+nx;i++){ //各セル
+    //                 for (j=ng;j<ng+ny;j++){ //各セル
+    //                     Ic=I(i,j,k);
+                        
+    //                     for (xi=0;xi<nsc;xi++){
+    //                         stn[xi]=U[k_RK][0][I(i,j,k-(nsc-1)/2+xi)]; //セルを中心としてステンシルを計算
+    //                         if (smoothing) stn[xi]=pow(stn[xi],alpha)/(pow(stn[xi],alpha)+pow(1.0-stn[xi],alpha));
+    //                     }
+                        
+    //                     //セル中心における勾配値を計算
+    //                     grad_VOF[2][Ic]=0.0;
+                        
+    //                     for (kc=0;kc<(nsc-1)/2;kc++){
+    //                         grad_VOF[2][Ic]+=(coef_Pn_D1_CC[kc]*stn[kc]+coef_Pn_D1_CC[nsc-1-kc]*stn[nsc-1-kc]);
+    //                     }
+    //                     grad_VOF[2][Ic]+=coef_Pn_D1_CC[(nsc-1)/2]*stn[(nsc-1)/2];
+
+    //                     // for (kc=0;kc<nsc;kc++){
+    //                     //     grad_VOF[2][Ic]+=coef_Pn_D1_CC[kc]*stn[kc];
+    //                     // }
+                        
+    //                     grad_VOF[2][Ic]/=dz;
+                        
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+    
+    // 勾配ベクトルのノルムの計算
+    // #pragma omp parallel
+    // {
+    //     // int ii,jj;
+    //     // double grad_VOF_x,grad_VOF_y;
+    //     int xi,kc;
+    //     int nsc=3;
+    //     double l,dnxdx,dnydy,dnzdz;
+        
+    //     #pragma omp for private(j,k,Ic)
+    //     for (i=ng;i<ng+nx;i++){ //各セル
+    //         for (j=ng;j<ng+ny;j++){ //各セル
+    //             for (k=ng;k<ng+nz;k++){ //各セル
+    //                 Ic=I(i,j,k);
+    //                 curv[Ic]=0.0;
+                    
+    //                 //勾配ベクトルの正規化
+    //                 // l=max(sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic]))),1.0e-20);
+    //                 grad_VOF[3][Ic]=sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic])));
+    //                 // if (grad_VOF[3][Ic]>1.0e-20 || 0){
+    //                 //     grad_VOF[0][Ic]/=l; grad_VOF[1][Ic]/=l; grad_VOF[2][Ic]/=l; grad_VOF[3][Ic]=l;
+    //                 // }
+    //             }
+    //         }
+    //     }
+    // }
+}
+
+void curv_cal(){
+    // int i,j,k,Ic;
+    // double alpha1,eps_int=1.0e-4;
+    
+    // // Exact curvature in static droplet2
+    // if (0){
+    //     for (i=0;i<nx;i++){
+    //         for (j=0;j<ny;j++){
+    //             for (k=0;k<nz;k++){
+    //                 Ic=I(ng_CSF+i,ng_CSF+j,ng_CSF+k);
+    //                 alpha1=U[k_RK][0][Ic];
+    //                 if (((eps_int<alpha1) && (alpha1<1.0-eps_int)) && 1){
+    //                     curv[Ic]=1.0/max(sqrt(sum_cons3(pow2(xc[i]),pow2(yc[j]),pow2(zc[k]))),eps);
+    //                     // curv[Ic]=1.0;
+    //                 }
+    //                 else {
+    //                     curv[Ic]=0.0;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+    
+    // // Linear interpolation
+    // if (1){
+    //     #pragma omp parallel
+    //     {
+    //         // int ii,jj;
+    //         // double grad_VOF_x,grad_VOF_y;
+    //         int xi,kc;
+    //         int nsc=3;
+    //         double l,dnxdx,dnydy,dnzdz;
+    //         bool normal_exist;
+            
+    //         #pragma omp for private(j,k,Ic)
+    //         for (i=ng;i<ng+nx;i++){ //各セル
+    //             for (j=ng;j<ng+ny;j++){ //各セル
+    //                 for (k=ng;k<ng+nz;k++){ //各セル
+    //                     Ic=I(i,j,k);
+    //                     curv[Ic]=0.0;
+                        
+    //                     //勾配ベクトルの正規化
+    //                     // l=max(sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic]))),1.0e-20);
+    //                     l=sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic])));
+    //                     if (l>1.0e-20 || 0){
+    //                         // grad_VOF[0][Ic]/=l; grad_VOF[1][Ic]/=l; grad_VOF[2][Ic]/=l;
+    //                         normal_vec[0][Ic]=grad_VOF[0][Ic]/l;
+    //                         normal_vec[1][Ic]=grad_VOF[1][Ic]/l;
+    //                         normal_vec[2][Ic]=grad_VOF[2][Ic]/l;
+    //                         normal_vec[3][Ic]=1.0;
+    //                     }
+    //                     else {
+    //                         // grad_VOF[0][Ic]=grad_VOF[1][Ic]=grad_VOF[2][Ic]=0.0;
+    //                         normal_vec[0][Ic]=normal_vec[1][Ic]=normal_vec[2][Ic]=0.0;
+    //                         normal_vec[3][Ic]=0.0;
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         #pragma omp for private(j,k,Ic)
+    //         for (i=ng;i<ng+nx;i++){ //各セル
+    //             for (j=ng;j<ng+ny;j++){ //各セル
+    //                 for (k=ng;k<ng+nz;k++){ //各セル
+    //                     normal_exist=normal_vec[3][Ic]==1.0;
+    //                     Ic=I(i,j,k);
+    //                     if (dim>=1) normal_exist=normal_exist && (normal_vec[3][I(i+1,j,k)]==1.0) && (normal_vec[3][I(i-1,j,k)]==1.0);
+    //                     if (dim>=2) normal_exist=normal_exist && (normal_vec[3][I(i,j+1,k)]==1.0) && (normal_vec[3][I(i,j-1,k)]==1.0);
+    //                     if (dim>=3) normal_exist=normal_exist && (normal_vec[3][I(i,j,k+1)]==1.0) && (normal_vec[3][I(i,j,k-1)]==1.0);
+    //                     if (normal_exist || 0){
+    //                         // dnxdx=(grad_VOF[0][I(i+1,j,k)]-grad_VOF[0][I(i-1,j,k)])/(2.0*dx);
+    //                         // dnydy=(grad_VOF[1][I(i,j+1,k)]-grad_VOF[1][I(i,j-1,k)])/(2.0*dy);
+    //                         // dnzdz=(grad_VOF[2][I(i,j,k+1)]-grad_VOF[2][I(i,j,k-1)])/(2.0*dz);
+    //                         dnxdx=(normal_vec[0][I(i+1,j,k)]-normal_vec[0][I(i-1,j,k)])/(2.0*dx);
+    //                         dnydy=(normal_vec[1][I(i,j+1,k)]-normal_vec[1][I(i,j-1,k)])/(2.0*dy);
+    //                         dnzdz=(normal_vec[2][I(i,j,k+1)]-normal_vec[2][I(i,j,k-1)])/(2.0*dz);
+    //                     }
+    //                     else {
+    //                         dnxdx=dnydy=dnzdz=0.0;
+    //                     }
+                        
+    //                     //セル中心における曲率を計算
+    //                     curv[Ic]=-sum_cons3(dnxdx,dnydy,dnzdz);
+                        
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+    
+    // // Height function method (2D)
+    // if (0){
+    //     #pragma omp parallel
+    //     {
+    //         int ii,jj;
+    //         double grad_VOF_x,grad_VOF_y,H1,H2;
+    //         vec2d stn(7,vec1d(3)); //ステンシル
+    //         vec1d Height(3);
+            
+    //         #pragma omp for private(j,k,Ic)
+    //         for (i=ng;i<ng+nx;i++){ //各セル
+    //             for (j=ng;j<ng+ny;j++){ //各セル
+    //                 for (k=ng;k<ng+nz;k++){ //各セル
+    //                     Ic=I(i,j,k);
+    //                     curv[Ic]=0.0;
+                        
+    //                     grad_VOF_x=(VOF_x_HLLC[I_x(i+1,j,k)]-VOF_x_HLLC[I_x(i,j,k)])/dx;
+    //                     grad_VOF_y=(VOF_y_HLLC[I_y(i,j+1,k)]-VOF_y_HLLC[I_y(i,j,k)])/dy;
+                        
+    //                     // nx>ny
+    //                     if (fabs(grad_VOF_x)>fabs(grad_VOF_y)){
+    //                         for (ii=-3;ii<=3;ii++){
+    //                             for (jj=-1;jj<=1;jj++){
+    //                                 stn[3+ii][1+jj]=U[k_RK][0][I(i+ii,j+jj,k)];
+    //                             }
+    //                         }
+    //                         for (jj=-1;jj<=1;jj++){
+    //                             Height[1+jj]=0.0;
+    //                             for (ii=-3;ii<=3;ii++){
+    //                                 Height[1+jj]+=stn[3+ii][1+jj]*dx;
+    //                             }
+    //                         }
+    //                         if ((3.0*dx<Height[1]) && (Height[1]<4.0*dx) || 0){
+    //                             H1=(Height[2]-Height[0])/(2.0*dy);
+    //                             H2=(Height[2]-2.0*Height[1]+Height[0])/(dy*dy);
+    //                             curv[Ic]=fabs(H2)/pow(1.0+H1*H1,1.5);
+    //                         }
+    //                         else if (Height[1]<3.0*dx){
+                                
+    //                         }
+    //                     }
+    //                     // ny>nx
+    //                     else {
+    //                         for (jj=-3;jj<=3;jj++){
+    //                             for (ii=-1;ii<=1;ii++){
+    //                                 stn[3+jj][1+ii]=U[k_RK][0][I(i+ii,j+jj,k)];
+    //                             }
+    //                         }
+    //                         for (ii=-1;ii<=1;ii++){
+    //                             Height[1+ii]=0.0;
+    //                             for (jj=-3;jj<=3;jj++){
+    //                                 Height[1+ii]+=stn[3+jj][1+ii]*dy;
+    //                             }
+    //                         }
+    //                         if ((3.0*dy<Height[1]) && (Height[1]<4.0*dy) || 0){
+    //                             H1=(Height[2]-Height[0])/(2.0*dx);
+    //                             H2=(Height[2]-2.0*Height[1]+Height[0])/(dx*dx);
+    //                             curv[Ic]=fabs(H2)/pow(1.0+H1*H1,1.5);
+    //                         }
+    //                     }
+                        
+                        
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+    
+    // // filtering strategy
+    // if (1){
+    //     #pragma omp parallel
+    //     {
+    //         // int ii,jj;
+            
+    //         #pragma omp for private(j,k,Ic,alpha1)
+    //         for (i=ng;i<ng+nx;i++){ //各セル
+    //             for (j=ng;j<ng+ny;j++){ //各セル
+    //                 for (k=ng;k<ng+nz;k++){ //各セル
+    //                     Ic=I(i,j,k);
+    //                     alpha1=U[k_RK][0][Ic];
+    //                     weight_filter[Ic]=pow2(alpha1*(1.0-alpha1));
+                        
+    //                 }
+    //             }
+    //         }
+    //         #pragma omp for private(j,k,Ic)
+    //         for (i=ng+1;i<ng+nx-1;i++){ //各セル
+    //             for (j=ng+1;j<ng+ny-1;j++){ //各セル
+    //                 for (k=ng;k<ng+nz;k++){ //各セル
+    //                     Ic=I(i,j,k);
+    //                     weight_sum_filter[Ic]=weight_filter[Ic]
+    //                         +((weight_filter[I(i-1,j-1,k)]+weight_filter[I(i+1,j+1,k)])
+    //                         + (weight_filter[I(i+1,j-1,k)]+weight_filter[I(i-1,j+1,k)]))
+    //                         +((weight_filter[I(i,j-1,k)]+weight_filter[I(i,j+1,k)])
+    //                         + (weight_filter[I(i-1,j,k)]+weight_filter[I(i+1,j,k)]));
+    //                     weight_sum_filter[Ic]=max(weight_sum_filter[Ic],1.0e-20);
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     int m=0,n_itr=5;
+    //     while (m<n_itr){
+    //         #pragma omp parallel
+    //         {
+    //             #pragma omp for private(j,k,Ic)
+    //             for (i=ng+1;i<ng+nx-1;i++){ //各セル
+    //                 for (j=ng+1;j<ng+ny-1;j++){ //各セル
+    //                     for (k=ng;k<ng+nz;k++){ //各セル
+    //                         Ic=I(i,j,k);
+    //                         curv_sum_filter[Ic]=weight_filter[Ic]*curv[Ic]
+    //                             +((weight_filter[I(i-1,j-1,k)]*curv[I(i-1,j-1,k)]+weight_filter[I(i+1,j+1,k)]*curv[I(i+1,j+1,k)])
+    //                             + (weight_filter[I(i+1,j-1,k)]*curv[I(i+1,j-1,k)]+weight_filter[I(i-1,j+1,k)]*curv[I(i-1,j+1,k)]))
+    //                             +((weight_filter[I(i,j-1,k)]*curv[I(i,j-1,k)]+weight_filter[I(i,j+1,k)]*curv[I(i,j+1,k)])
+    //                             + (weight_filter[I(i-1,j,k)]*curv[I(i-1,j,k)]+weight_filter[I(i+1,j,k)]*curv[I(i+1,j,k)]));
+    //                     }
+    //                 }
+    //             }
+    //             #pragma omp for private(j,k,Ic)
+    //             for (i=ng+1;i<ng+nx-1;i++){ //各セル
+    //                 for (j=ng+1;j<ng+ny-1;j++){ //各セル
+    //                     for (k=ng;k<ng+nz;k++){ //各セル
+    //                         Ic=I(i,j,k);
+    //                         curv[Ic]=curv_sum_filter[Ic]/weight_sum_filter[Ic];
+    //                         if (isnan(curv[Ic])){
+    //                             printf("stop\n"); getchar();
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         m++;
+    //     }
+    // }
+}
+
+void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n){
+    
+    double deno;
+    
+    if (n==3){
+        coef_Pn_D1_CC={-1., 0., 1.};
+        deno=2.;
+    }
+    else if (n==5){
+        coef_Pn_D1_CC={5., -34., 0., 34., -5.};
+        deno=48.;
+    }
+    else if (n==7){
+        coef_Pn_D1_CC={-259., 2236., -9455., 0., 9455., -2236., 259.};
+        deno=11520.;
+    }
+    else if (n==9){
+        coef_Pn_D1_CC={3229., -33878., 170422., -574686., 0., 574686., -170422., 33878., -3229.};
+        deno=645120.;
+    }
+    else if (n==11){
+        coef_Pn_D1_CC={-117469., 1456392., -8592143., 32906032., -96883458., 0., 96883458., -32906032., 8592143., -1456392., 117469.};
+        deno=103219200.;
+    }
+    else if (n==13){
+        coef_Pn_D1_CC={7156487., -102576686., 699372916., -3055539322., 9868012803., -26521889196., 0., 26521889196., -9868012803., 3055539322., -699372916., 102576686., -7156487.};
+        deno=27249868800.;
+    }
+    else if (n==15){
+        coef_Pn_D1_CC={-2430898831., 39590631044., -307360078831., 1523913922544., -5491720851331., 15758300772500., -39658726267875., 0., 39658726267875., -15758300772500., 5491720851331., -1523913922544., 307360078831., -39590631044., 2430898831.};
+        deno=39675808972800.;
+    }
+    else if (n==17){
+        coef_Pn_D1_CC={4574844075., -83495007698., 728461015102., -4060076056898., 16354419488602., -51427361405498., 135225244018150., -323811837170250., 0., 323811837170250., -135225244018150., 51427361405498., -16354419488602., 4060076056898., -728461015102., 83495007698., -4574844075.};
+        deno=317406471782400.;
+    }
+    
+    for (int k=0;k<n;k++){
+        coef_Pn_D1_CC[k]/=deno;
+    }
+    
 }
