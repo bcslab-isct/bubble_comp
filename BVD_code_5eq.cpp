@@ -64,7 +64,7 @@ int bvc_check; // flag for BVC (boundary value correction)
 vec2d F_x, F_y, F_z; // flux vector in x, y, z-direction
 vec2d Apdq_x, Amdq_x, Adq_x, Apdq_y, Amdq_y, Adq_y, Apdq_z, Amdq_z, Adq_z; // fluctuation in x, y, z-direction for wave-propagation method
 double CFL; // Courant number
-int rk, RK_stage; // stage number in Runge Kutta method
+int RK_stage; // stage number in Runge Kutta method
 vec2d RK_alpha; // coefficients of Runge Kutta method
 vec1d RK_beta; // coefficients of Runge Kutta method
 
@@ -105,18 +105,18 @@ void prim_to_cons_5eq(double *alpha1rho1,double *alpha2rho2,double *rhou,double 
 void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,double *p,
                   double alpha1,double alpha1rho1,double alpha2rho2,double rhou,double rhov,double rhow,double rhoE);
 void initialize_BVD_active();
-void boundary_condition();
-void reconstruction();
+void boundary_condition(int);
+void reconstruction(int);
 void MUSCL(double*, double*, const vec1d&);
 double Phi_MUSCL(double);
 void THINC(double*, double*, const vec1d&);
-void BVD_selection_x();
-void BVD_selection_y();
-void BVD_selection_z();
+void BVD_selection_x(int);
+void BVD_selection_y(int);
+void BVD_selection_z(int);
 // void bvc_Euler_x(int);
 void Riemann_solver_5eq_HLLC(double*,double*,double*);
 void cal_dt(double,double,double);
-void update();
+void update(int);
 void output_result();
 void plot_result();
 double sign(double);
@@ -127,14 +127,14 @@ inline int I_z(int, int, int);
 double q2(double,double,double);
 double sum_cons3(double, double, double);
 double pow_int(double x,int n);
-void CSFmodel();
+void CSFmodel(int);
 void grad_VOF_cal();
 void curv_cal();
 void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n);
 
 int main(void){
     
-    int i, m, per;
+    int i, m, rk, per;
     double percent, MWS_x, MWS_y, MWS_z;
     
     parameter();
@@ -155,20 +155,20 @@ int main(void){
         
         for (rk = 0; rk < RK_stage; rk++){
             // set values in ghost cells
-            boundary_condition();
+            boundary_condition(rk);
             
             // interpolate cell boundary values
-            reconstruction();
+            reconstruction(rk);
             
             // calculate carvature for surface tension
-            CSFmodel();
+            CSFmodel(rk);
             
             // calculate numerical flux
             Riemann_solver_5eq_HLLC(&MWS_x, &MWS_y, &MWS_z);
             
             // update numerical solution
             cal_dt(MWS_x, MWS_y, MWS_z);
-            update();
+            update(rk);
 
         }
         t += dt;
@@ -254,7 +254,7 @@ void parameter(){
             x_range[1] = 1.0; // x_coordinate at right boundary of computational domain
             boundary_type = {1, 1}; // boundary condition type (1: outflow)
             material = "water-air2_nondim"; // material name for equation of state
-            sound_speed_type = 1; // system sound speed
+            sound_speed_type = 2; // system sound speed
         }
         
         else if (problem_type == 2){
@@ -487,7 +487,7 @@ void initial_condition(){
     if (dim == 1){
         // 1D shock-tube problem
         if (problem_type == 1){
-            t_end = 0.25; // time to end calculation
+            t_end = 0.2; // time to end calculation
             initial_condition_1D_GasLiquidRiemann();
         }
         else if (problem_type == 2){
@@ -497,7 +497,7 @@ void initial_condition(){
     else if (dim == 2){
         // 2D static droplet problem
         if (problem_type == 1){
-            t_end = 0.25; // time to end calculation
+            t_end = 10.0; // time to end calculation
             initial_condition_2D_static_droplet();
         }
     }
@@ -612,18 +612,18 @@ void prim_to_cons_5eq(double *alpha1rho1,double *alpha2rho2,double *rhou,double 
     *rhov=rho_mix*v;
     *rhow=rho_mix*w;
     udotu=q2(u,v,w);
-    // *rhoE=alpha1*((p+gamma1*pi1)/(gamma1-1.0)+rho1*eta1+0.5*rho1*udotu)+alpha2*((p+gamma2*pi2)/(gamma2-1.0)+rho2*eta2+0.5*rho2*udotu);
+    *rhoE=alpha1*((p+gamma1*pi1)/(gamma1-1.0)+rho1*eta1+0.5*rho1*udotu)+alpha2*((p+gamma2*pi2)/(gamma2-1.0)+rho2*eta2+0.5*rho2*udotu);
     // double Gamma,Pi,rhoeta;
     // Gamma=alpha1/(gamma1-1.0)+alpha2/(gamma2-1.0);
     // Pi=(alpha1*gamma1*pi1)/(gamma1-1.0)+(alpha2*gamma2*pi2)/(gamma2-1.0);
     // rhoeta=(*alpha1rho1)*eta1+(*alpha2rho2)*eta2;
     // *rhoE=Gamma*p+Pi+rhoeta+0.5*rho_mix*udotu;
-    EOS_param_ref(&Gamma1,&p_ref1,&e_ref1,rho1,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
-    EOS_param_ref(&Gamma2,&p_ref2,&e_ref2,rho2,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
-    Gamma=1.0/(alpha1/Gamma1+alpha2/Gamma2);
-    p_ref=(Gamma)*(alpha1*p_ref1/Gamma1+alpha2*p_ref2/Gamma2);
-    rhoe_ref=(*alpha1rho1)*e_ref1+(*alpha2rho2)*e_ref2;
-    *rhoE=(p-p_ref)/Gamma+rhoe_ref+0.5*rho_mix*udotu;
+    // EOS_param_ref(&Gamma1,&p_ref1,&e_ref1,rho1,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+    // EOS_param_ref(&Gamma2,&p_ref2,&e_ref2,rho2,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+    // Gamma=1.0/(alpha1/Gamma1+alpha2/Gamma2);
+    // p_ref=(Gamma)*(alpha1*p_ref1/Gamma1+alpha2*p_ref2/Gamma2);
+    // rhoe_ref=(*alpha1rho1)*e_ref1+(*alpha2rho2)*e_ref2;
+    // *rhoE=(p-p_ref)/Gamma+rhoe_ref+0.5*rho_mix*udotu;
 }
 
 void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,double *p,
@@ -639,17 +639,17 @@ void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,do
     *v=rhov/rho_mix;
     *w=rhow/rho_mix;
     udotu=q2(*u,*v,*w);
-    // *p=((rhoE-0.5*rho_mix*udotu)-(alpha1rho1*eta1+alpha2rho2*eta2)-(alpha1*gamma1*pi1/(gamma1-1.0)+alpha2*gamma2*pi2/(gamma2-1.0)))/(alpha1/(gamma1-1.0)+alpha2/(gamma2-1.0));
-    EOS_param_ref(&Gamma1,&p_ref1,&e_ref1,*rho1,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
-    EOS_param_ref(&Gamma2,&p_ref2,&e_ref2,*rho2,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
-    Gamma=1.0/(alpha1/Gamma1+alpha2/Gamma2);
-    p_ref=(Gamma)*(alpha1*p_ref1/Gamma1+alpha2*p_ref2/Gamma2);
-    rhoe_ref=alpha1rho1*e_ref1+alpha2rho2*e_ref2;
-    *p=p_ref+Gamma*((rhoE-0.5*rho_mix*udotu)-rhoe_ref);
+    *p=((rhoE-0.5*rho_mix*udotu)-(alpha1rho1*eta1+alpha2rho2*eta2)-(alpha1*gamma1*pi1/(gamma1-1.0)+alpha2*gamma2*pi2/(gamma2-1.0)))/(alpha1/(gamma1-1.0)+alpha2/(gamma2-1.0));
+//     EOS_param_ref(&Gamma1,&p_ref1,&e_ref1,*rho1,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+//     EOS_param_ref(&Gamma2,&p_ref2,&e_ref2,*rho2,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+//     Gamma=1.0/(alpha1/Gamma1+alpha2/Gamma2);
+//     p_ref=(Gamma)*(alpha1*p_ref1/Gamma1+alpha2*p_ref2/Gamma2);
+//     rhoe_ref=alpha1rho1*e_ref1+alpha2rho2*e_ref2;
+//     *p=p_ref+Gamma*((rhoE-0.5*rho_mix*udotu)-rhoe_ref);
 }
 
 void initialize_BVD_active(){
-    int i, j, k, m, Ic, d;
+    int i, j, k, m, Ic, d, rk;
     for (d = 0; d < dim; d++){
         for (rk = 0; rk < RK_stage; rk++){
             for (m = 0; m < num_var; m++){
@@ -666,7 +666,7 @@ void initialize_BVD_active(){
     }
 }
 
-void boundary_condition(){
+void boundary_condition(int rk){
     int i, j, k, m, Ic, Ic_ref;
     
     // boundary condition in x-direction
@@ -727,7 +727,7 @@ void boundary_condition(){
     }
 }
 
-void reconstruction(){
+void reconstruction(int rk){
     int i, j, k, m, xi, Ixp, Ixm;
     double q_L, q_R;
     vec2d stencil(num_var, vec1d(ns));
@@ -785,7 +785,7 @@ void reconstruction(){
         }
         
         if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
-            BVD_selection_x();
+            BVD_selection_x(rk);
         }
         
         
@@ -811,26 +811,25 @@ void reconstruction(){
 
 void MUSCL(double *qL, double *qR, const vec1d& q){
     
-    double Phi_L, Phi_R, r_i;
+    double Phi_L, Phi_R, r_i, dq;
     
-    if (fabs(q[2] - q[1]) > eps){ // avoid zero-division
+    if (fabs(q[1] - q[0]) > eps && fabs(q[2] - q[1]) > eps){ // avoid zero-division
         r_i = (q[1] - q[0]) / (q[2] - q[1]);
         Phi_L = Phi_MUSCL(r_i);
-        *qL = q[1] + 0.5 * Phi_L * (q[2] - q[1]); // left-side cell boundary value
-        
-        r_i = (q[3] - q[2]) / (q[2] - q[1]);
-        Phi_R = Phi_MUSCL(r_i);
-        *qR = q[2] - 0.5 * Phi_R * (q[2] - q[1]); // right-side cell boundary value
+        dq = 0.5 * Phi_L * (q[2] - q[1]);
+        *qL = q[1] + dq; // left-side cell boundary value
+        *qR = q[1] - dq; // right-side cell boundary value
     }
     else {
         *qL = q[1];
-        *qR = q[2];
+        *qR = q[1];
     }
 
 }
 
 double Phi_MUSCL(double r_i){
     return (r_i + fabs(r_i)) / (1.0 + fabs(r_i)); // van leer limiter
+    // return 0; // piecewise constant reconstruction
 }
 
 void THINC(double *qL, double *qR, const vec1d& q){
@@ -862,7 +861,7 @@ void THINC(double *qL, double *qR, const vec1d& q){
     }
 }
 
-void BVD_selection_x(){
+void BVD_selection_x(int rk){
     int i, j, k, m, Ixm, Ixp;
     double TBV[2];
     int d = 0; // x-direction
@@ -899,7 +898,7 @@ void BVD_selection_x(){
     }
 }
 
-void BVD_selection_y(){
+void BVD_selection_y(int rk){
     int i, j, k, m, Iym, Iyp;
     double TBV[2];
     int d = 1; // y-direction
@@ -936,7 +935,7 @@ void BVD_selection_y(){
     }
 }
 
-void BVD_selection_z(){
+void BVD_selection_z(int rk){
     int i, j, k, m, Izm, Izp;
     double TBV[2];
     int d = 2; // z-direction
@@ -1360,7 +1359,7 @@ void cal_dt(double MWS_x, double MWS_y, double MWS_z){
     }
 }
 
-void update(){
+void update(int rk){
     int i, j, k, m, Ic, Ixm, Ixp, Iym, Iyp, Izm, Izp, s, rk_next = (rk + 1) % RK_stage;
     double L, rho, rhou, rhoE, u, p;
     
@@ -1410,7 +1409,7 @@ void update(){
 }
 
 void output_result(){
-    int i, j, k, m, Ic, d;
+    int i, j, k, m, Ic, d, rk;
     double alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE, rho1, rho2, u, v, w, p, rho;
     int BVD_func;
     
@@ -1467,18 +1466,19 @@ void plot_result(){
     string variable_name;
     double yr_min, yr_max;
     
-    int plot_var = 1; // 1: density, 2: velocity, 3: pressure, 4: BVD_active
-    if      (plot_var == 1) variable_name = "density";
-    else if (plot_var == 2) variable_name = "velocity";
-    else if (plot_var == 3) variable_name = "pressure";
-    else if (plot_var == 4) variable_name = "BVD_active";
+    int plot_var = 1; // 1: volume fraction
+    if      (plot_var == 1) variable_name = "volume fraction";
+    // else if (plot_var == 2) variable_name = "velocity";
+    // else if (plot_var == 3) variable_name = "pressure";
+    // else if (plot_var == 4) variable_name = "BVD_active";
     
-    if (problem_type == 1){ // Sod problem
-        yr_min = 0.0; yr_max = 1.2;
-    }
-    else if (problem_type == 2){ // Le Blanc problem
-        yr_min = 1.0e-3; yr_max = 1.0;
-    }
+    // if (problem_type == 1){ // Sod problem
+    //     yr_min = 0.0; yr_max = 1.2;
+    // }
+    // else if (problem_type == 2){ // Le Blanc problem
+    //     yr_min = 1.0e-3; yr_max = 1.0;
+    // }
+    yr_min = 0.0; yr_max = 1.2;
     
     #if defined(_WIN32) || defined(_WIN64)
         // for windows pc
@@ -1533,7 +1533,7 @@ void plot_result(){
             fprintf(gp, "set xl \"x\"\n");
             fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
             fprintf(gp, "set title \"1D Euler\"\n");
-            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
+            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 3, scheme_name.c_str());
             fflush(gp);
             pclose(gp);
         }
@@ -1591,7 +1591,7 @@ double pow_int(double x,int n){
     return xn;
 }
 
-void CSFmodel(){
+void CSFmodel(int rk){
     if (surface_tension_type == 1 || surface_tension_type == 2){
         grad_VOF_cal();
         curv_cal();
