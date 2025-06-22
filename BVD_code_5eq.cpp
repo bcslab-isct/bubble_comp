@@ -40,6 +40,20 @@ typedef std::vector<vec2d> vec3d;
 typedef std::vector<vec3d> vec4d;
 typedef std::vector<vec4d> vec5d;
 
+// using IndexFunc = int(*)(int, int, int);
+// IndexFunc I_cb[3] = { I_x, I_y, I_z };
+// int di[3] = {1, 0, 0};
+// int dj[3] = {0, 1, 0};
+// int dk[3] = {0, 0, 1};
+
+// template<int d>
+// inline int I_cb(int i, int j, int k) {
+//     if constexpr (d == 0) return I_x(i, j, k);
+//     else if constexpr (d == 1) return I_y(i, j, k);
+//     else return I_z(i, j, k);
+// }
+
+
 // global variables
 int dim; // number of spatial dimension (1, 2, or 3)
 int EOS_type; // 1: ideal gas, 2: stiffened gas, 3: Mie-Gruneisen EOS
@@ -110,6 +124,7 @@ void reconstruction(int);
 void MUSCL(double*, double*, const vec1d&);
 double Phi_MUSCL(double);
 void THINC(double*, double*, const vec1d&);
+void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R);
 void BVD_selection_x(int);
 void BVD_selection_y(int);
 void BVD_selection_z(int);
@@ -124,6 +139,7 @@ inline int I_c(int, int, int);
 inline int I_x(int, int, int);
 inline int I_y(int, int, int);
 inline int I_z(int, int, int);
+inline void get_cb_indices_from_cc(int, int, int, int, int&, int&);
 double q2(double,double,double);
 double sum_cons3(double, double, double);
 double pow_int(double x,int n);
@@ -785,7 +801,8 @@ void reconstruction(int rk){
         }
         
         if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
-            BVD_selection_x(rk);
+            // BVD_selection_x(rk);
+            BVD_selection_dim(0, rk, W_x_L, W_x_R);
         }
         
         
@@ -829,7 +846,7 @@ void MUSCL(double *qL, double *qR, const vec1d& q){
 
 double Phi_MUSCL(double r_i){
     return (r_i + fabs(r_i)) / (1.0 + fabs(r_i)); // van leer limiter
-    // return 0; // piecewise constant reconstruction
+    // return 0; // piecewise-constant reconstruction
 }
 
 void THINC(double *qL, double *qR, const vec1d& q){
@@ -837,27 +854,58 @@ void THINC(double *qL, double *qR, const vec1d& q){
     
     T1 = T1_THINC;
     
-    // left-side cell boundary value
     if ((q[1] - q[0]) * (q[2] - q[1]) > eps_THINC){
-        q_p = (q[0] + q[2]) / 2.0;
-        q_m = (q[2] - q[0]) / 2.0;
+        q_p = 0.5 * (q[0] + q[2]);
+        q_m = 0.5 * (q[2] - q[0]);
         alpha = (q[1] - q_p) / q_m;
-        T2 = tanh(alpha * beta / 2.0);
-        *qL = q_p + q_m * (T1 + T2 / T1) / (1.0 + T2);
+        T2 = tanh(0.5 * alpha * beta);
+        *qL = q_p + q_m * (T1 + T2 / T1) / (1.0 + T2); // left-side cell boundary value
+        *qR = q_p - q_m * (T1 - T2 / T1) / (1.0 - T2); // right-side cell boundary value
     }
     else {
         *qL = q[1];
+        *qR = q[1];
     }
-    // right-side cell boundary value
-    if ((q[2] - q[1]) * (q[3] - q[2]) > eps_THINC){
-        q_p = (q[1] + q[3]) / 2.0;
-        q_m = (q[3] - q[1]) / 2.0;
-        alpha = (q[2] - q_p) / q_m;
-        T2 = tanh(alpha * beta / 2.0);
-        *qR = q_p - q_m * (T1 - T2 / T1) / (1.0 - T2);
+}
+
+void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
+    int i, j, k, m, Im, Ip;
+    double TBV[2];
+    
+    // calculate TBV (Total Boundary Variation) and compare
+    // #pragma omp parallel for collapse(4)
+    for (m = 0; m < num_var; m++){
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
+                    // Im = I_cb<d>(i, j, k); // index of cell boundary
+                    // Ip = I_cb<d>(i + di[d], j + dj[d], k + dk[d]); // index of cell boundary
+                    get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
+                    TBV[0] = fabs(W_L[0][m][Im] - W_R[0][m][Im]) + fabs(W_L[0][m][Ip] - W_R[0][m][Ip]); // TBV of MUSCL
+                    TBV[1] = fabs(W_L[1][m][Im] - W_R[1][m][Im]) + fabs(W_L[1][m][Ip] - W_R[1][m][Ip]); // TBV of THINC
+                    if (TBV[0] > TBV[1]){
+                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+                    }
+                }
+            }
+        }
     }
-    else {
-        *qR = q[2];
+    
+    // select numerical scheme which has smaller TBV value
+    for (m = 0; m < num_var; m++){
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
+                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
+                        // Im = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                        // Ip = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                        get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
+                        W_L[0][m][Ip] = W_L[1][m][Ip];
+                        W_R[0][m][Im] = W_R[1][m][Im];
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1563,6 +1611,24 @@ inline int I_y(int i, int j, int k){
 inline int I_z(int i, int j, int k){
     return NX * NY * k + NX * j + i;
 }
+
+inline void get_cb_indices_from_cc(int d, int i, int j, int k, int& Im, int& Ip){
+    switch (d) {
+        case 0:
+            Im = I_x(i, j, k);
+            Ip = I_x(i + 1, j, k);
+            break;
+        case 1:
+            Im = I_y(i, j, k);
+            Ip = I_y(i, j + 1, k);
+            break;
+        case 2:
+            Im = I_z(i, j, k);
+            Ip = I_z(i, j, k + 1);
+            break;
+    }
+}
+
 
 double q2(double u,double v,double w){
     return sum_cons3(u*u,v*v,w*w);
