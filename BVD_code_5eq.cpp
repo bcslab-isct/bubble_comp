@@ -52,7 +52,7 @@ typedef std::vector<vec4d> vec5d;
 //     else if constexpr (d == 1) return I_y(i, j, k);
 //     else return I_z(i, j, k);
 // }
-
+vec1i loop_begin_base, loop_size_base;
 
 // global variables
 int dim; // number of spatial dimension (1, 2, or 3)
@@ -120,11 +120,13 @@ void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,do
                   double alpha1,double alpha1rho1,double alpha2rho2,double rhou,double rhov,double rhow,double rhoE);
 void initialize_BVD_active();
 void boundary_condition(int);
+void boundary_condition_dim(int,int);
 void reconstruction(int);
+void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R);
 void MUSCL(double*, double*, const vec1d&);
 double Phi_MUSCL(double);
 void THINC(double*, double*, const vec1d&);
-void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R);
+void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R, vec3i&);
 void BVD_selection_x(int);
 void BVD_selection_y(int);
 void BVD_selection_z(int);
@@ -174,7 +176,8 @@ int main(void){
             boundary_condition(rk);
             
             // interpolate cell boundary values
-            reconstruction(rk);
+            // reconstruction(rk);
+            reconstruction_dim(0, rk, W_x_L, W_x_R);
             
             // calculate carvature for surface tension
             CSFmodel(rk);
@@ -313,6 +316,9 @@ void parameter(){
     else if (dim == 3){
         
     }
+    
+    loop_begin_base = {ngx, ngy, ngz};
+    loop_size_base = {nx, ny, nz};
     
     NX = nx + ngx * 2; // total number of cell in x-direction including ghost cell
     NY = ny + ngy * 2; // total number of cell in y-direction including ghost cell
@@ -682,6 +688,67 @@ void initialize_BVD_active(){
     }
 }
 
+void boundary_condition_dim(int d, int rk){
+    int i, j, k, m, Ic, Ic_ref;
+    
+    // boundary condition in x-direction
+    if (dim >= 1){
+        for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (i = 0; i < ngx; i++){ // ghost cells in x-direction
+                    
+                    // negative side from x_range[0]
+                    Ic = I_c(i, j, k);
+                    if (boundary_type[0] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(ngx, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[0] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(ngx * 2 - 1 - i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                        U[rk][3][Ic] = -U[rk][3][Ic]; // invert velocity component
+                    }
+                    else if (boundary_type[0] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(nx + i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[0] == 4){ //
+                        
+                    }
+                    
+                    // positive side from x_range[1]
+                    Ic = I_c(NX - 1 - i, j, k);
+                    if (boundary_type[1] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(nx + ngx - 1, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[1] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(nx + i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                        U[rk][3][Ic] = -U[rk][3][Ic]; // invert velocity component
+                    }
+                    else if (boundary_type[1] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(ngx * 2 - 1 - i, j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 void boundary_condition(int rk){
     int i, j, k, m, Ic, Ic_ref;
     
@@ -743,6 +810,102 @@ void boundary_condition(int rk){
     }
 }
 
+void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
+    int i, j, k, m, xi, Ip, Im;
+    double q_L, q_R;
+    vec2d stencil(num_var, vec1d(ns));
+    vec1i idx(3);
+    
+    vec1i loop_begin = loop_begin_base;
+    vec1i loop_size = loop_size_base;
+    loop_begin[d] -= 1 + BVD_s;
+    loop_size[d]  += (1 + BVD_s) * 2;
+    
+    // reconstruction in d-direction
+    for (k = loop_begin[2]; k < loop_begin[2] + loop_size[2]; k++){ // each cell in z-direction
+        for (j = loop_begin[1]; j < loop_begin[1] + loop_size[1]; j++){ // each cell in y-direction
+            for (i = loop_begin[0]; i < loop_begin[0] + loop_size[0]; i++){ // each cell in x-direction
+                
+                // put conservative variables in stencil
+                for (m = 0; m < num_var; m++){ // each variables
+                    idx = {i, j, k};
+                    idx[d] = idx[d] - (ns - 1) / 2;
+                    for (xi = 0; xi < ns; xi++){
+                        // stencil[m][xi] = U[rk][m][I_c(i - (ns - 1) / 2 + xi, j, k)]; // stencil for reconstruction
+                        stencil[m][xi] = U[rk][m][I_c(idx[0], idx[1], idx[2])];
+                        idx[d]++;
+                    }
+                }
+                
+                // calculate primitive variables from conservative variables
+                for (xi = 0; xi < ns; xi++){
+                    cons_to_prim_5eq(&stencil[1][xi], &stencil[2][xi], &stencil[3][xi], &stencil[4][xi], &stencil[5][xi], &stencil[6][xi],
+                        stencil[0][xi], stencil[1][xi], stencil[2][xi], stencil[3][xi], stencil[4][xi], stencil[5][xi], stencil[6][xi]);
+                    stencil[1][xi] = stencil[0][xi] * stencil[1][xi]; // alpha1rho1=alpha1*rho1
+                    stencil[2][xi] = (1.0 - stencil[0][xi]) * stencil[2][xi]; // alpha2rho2=(1-alpha1)*rho2
+                }
+                    
+                // calculate cell boundary values
+                // q_L: left-side cell boundary value at x_{i+1/2}
+                // q_R: right-side cell boundary value at x_{i-1/2}
+                // Ip = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                // Im = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
+                for (m = 0; m < num_var; m++){
+                    
+                    if (scheme_type == 1){
+                        MUSCL(&q_L, &q_R, stencil[m]);
+                        W_L[0][m][Ip] = q_L;
+                        W_R[0][m][Im] = q_R;
+                    }
+                    else if (scheme_type == 2){
+                        THINC(&q_L, &q_R, stencil[m]);
+                        W_L[0][m][Ip] = q_L;
+                        W_R[0][m][Im] = q_R;
+                    }
+                    else if (scheme_type == 3){
+                        MUSCL(&q_L, &q_R, stencil[m]);
+                        W_L[0][m][Ip] = q_L;
+                        W_R[0][m][Im] = q_R;
+                        THINC(&q_L, &q_R, stencil[m]);
+                        W_L[1][m][Ip] = q_L;
+                        W_R[1][m][Im] = q_R;
+                    }
+                    
+                }
+            }
+        }
+    }
+    
+    if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
+        // BVD_selection_x(rk);
+        BVD_selection_dim(d, rk, W_L, W_R, BVD_active[d]);
+    }
+    
+    loop_begin = loop_begin_base;
+    loop_size = loop_size_base;
+    loop_begin[d] -= 1;
+    loop_size[d]  += 2;
+    for (k = loop_begin[2]; k < loop_begin[2] + loop_size[2]; k++){ // each cell in z-direction
+        for (j = loop_begin[1]; j < loop_begin[1] + loop_size[1]; j++){ // each cell in y-direction
+            for (i = loop_begin[0]; i < loop_begin[0] + loop_size[0]; i++){ // each cell in x-direction
+                // Ip = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                // Im = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
+                
+                W_L[0][1][Ip] = W_L[0][1][Ip] / W_L[0][0][Ip]; //rho1=alpha1rho1/alpha1
+                W_L[0][2][Ip] = W_L[0][2][Ip] / (1.0 - W_L[0][0][Ip]); //rho2=alpha2rho2/alpha2
+                
+                W_R[0][1][Im] = W_R[0][1][Im] / W_R[0][0][Im]; //rho1=alpha1rho1/alpha1
+                W_R[0][2][Im] = W_R[0][2][Im] / (1.0 - W_R[0][0][Im]); //rho2=alpha2rho2/alpha2
+            }
+        }
+    }
+    
+    // bvc_Euler_x(0); // if the reconstructed values violate positivity, the reconstruction function is degraded to 1st-order method to keep positivity.
+    
+}
+
 void reconstruction(int rk){
     int i, j, k, m, xi, Ixp, Ixm;
     double q_L, q_R;
@@ -802,7 +965,7 @@ void reconstruction(int rk){
         
         if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
             // BVD_selection_x(rk);
-            BVD_selection_dim(0, rk, W_x_L, W_x_R);
+            BVD_selection_dim(0, rk, W_x_L, W_x_R, BVD_active[0]);
         }
         
         
@@ -868,23 +1031,29 @@ void THINC(double *qL, double *qR, const vec1d& q){
     }
 }
 
-void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
+void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R, vec3i& BVD_active_dim){
     int i, j, k, m, Im, Ip;
     double TBV[2];
     
-    // calculate TBV (Total Boundary Variation) and compare
-    // #pragma omp parallel for collapse(4)
-    for (m = 0; m < num_var; m++){
-        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
-                    // Im = I_cb<d>(i, j, k); // index of cell boundary
-                    // Ip = I_cb<d>(i + di[d], j + dj[d], k + dk[d]); // index of cell boundary
+    // int loop_begin[3] = {ngx, ngy, ngz};
+    // int loop_size[3]  = {nx, ny, nz};
+    
+    vec1i loop_begin = loop_begin_base;
+    vec1i loop_size = loop_size_base;
+    loop_begin[d] -= BVD_s;
+    loop_size[d]  += BVD_s * 2;
+
+    // calculate and compare TBV (Total Boundary Variation)
+    #pragma omp parallel for collapse(4) private(k,j,i,Im,Ip,TBV)
+    for (m = 0; m < num_var; m++) {
+        for (k = loop_begin[2]; k < loop_begin[2] + loop_size[2]; k++) { // each cell in z-direction
+            for (j = loop_begin[1]; j < loop_begin[1] + loop_size[1]; j++) { // each cell in y-direction
+                for (i = loop_begin[0]; i < loop_begin[0] + loop_size[0]; i++) { // each cell in x-direction
                     get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
                     TBV[0] = fabs(W_L[0][m][Im] - W_R[0][m][Im]) + fabs(W_L[0][m][Ip] - W_R[0][m][Ip]); // TBV of MUSCL
                     TBV[1] = fabs(W_L[1][m][Im] - W_R[1][m][Im]) + fabs(W_L[1][m][Ip] - W_R[1][m][Ip]); // TBV of THINC
                     if (TBV[0] > TBV[1]){
-                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+                        BVD_active_dim[rk][m][I_c(i, j, k)] = 1;
                     }
                 }
             }
@@ -892,13 +1061,12 @@ void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
     }
     
     // select numerical scheme which has smaller TBV value
+    #pragma omp parallel for collapse(4) private(k,j,i,Im,Ip)
     for (m = 0; m < num_var; m++){
-        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
-                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
-                        // Im = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
-                        // Ip = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+        for (k = loop_begin[2]; k < loop_begin[2] + loop_size[2]; k++) { // each cell in z-direction
+            for (j = loop_begin[1]; j < loop_begin[1] + loop_size[1]; j++) { // each cell in y-direction
+                for (i = loop_begin[0]; i < loop_begin[0] + loop_size[0]; i++) { // each cell in x-direction
+                    if (BVD_active_dim[rk][m][I_c(i, j, k)] == 1){
                         get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
                         W_L[0][m][Ip] = W_L[1][m][Ip];
                         W_R[0][m][Im] = W_R[1][m][Im];
