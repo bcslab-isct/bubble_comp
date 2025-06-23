@@ -131,6 +131,7 @@ void BVD_selection_y(int);
 void BVD_selection_z(int);
 // void bvc_Euler_x(int);
 void Riemann_solver_5eq_HLLC(double*,double*,double*);
+void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const vec3d& W_R, vec2d& Amdq, vec2d& Apdq, vec2d& Adq);
 void cal_dt(double,double,double);
 void update(int);
 void output_result();
@@ -157,7 +158,7 @@ int main(void){
     parameter();
     
     // int num_threads = omp_get_max_threads(); // get maximum number of threads
-    int num_threads = 1; // set number of threads
+    int num_threads = 2; // set number of threads
     omp_set_num_threads(num_threads); // set number of threads for OpenMP
     
     initial_condition();
@@ -182,7 +183,8 @@ int main(void){
             CSFmodel(rk);
             
             // calculate numerical flux
-            Riemann_solver_5eq_HLLC(&MWS_x, &MWS_y, &MWS_z);
+            // Riemann_solver_5eq_HLLC(&MWS_x, &MWS_y, &MWS_z);
+            Riemann_solver_5eq_HLLC_dim(0, &MWS_x, W_x_L, W_x_R, Amdq_x, Apdq_x, Adq_x);
             
             // update numerical solution
             cal_dt(MWS_x, MWS_y, MWS_z);
@@ -1129,116 +1131,116 @@ void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R, vec3i& BVD_active_
     }
 }
 
-void BVD_selection_x(int rk){
-    int i, j, k, m, Ixm, Ixp;
-    double TBV[2];
-    int d = 0; // x-direction
+// void BVD_selection_x(int rk){
+//     int i, j, k, m, Ixm, Ixp;
+//     double TBV[2];
+//     int d = 0; // x-direction
     
-    for (m = 0; m < num_var; m++){
-        // calculate TBV (Total Boundary Variation) and compare
-        for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
-            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                    Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
-                    Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
-                    TBV[0] = fabs(W_x_L[0][m][Ixm] - W_x_R[0][m][Ixm]) + fabs(W_x_L[0][m][Ixp] - W_x_R[0][m][Ixp]); // TBV of MUSCL
-                    TBV[1] = fabs(W_x_L[1][m][Ixm] - W_x_R[1][m][Ixm]) + fabs(W_x_L[1][m][Ixp] - W_x_R[1][m][Ixp]); // TBV of THINC
-                    if (TBV[0] > TBV[1]){
-                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
-                    }
-                }
-            }
-        }
+//     for (m = 0; m < num_var; m++){
+//         // calculate TBV (Total Boundary Variation) and compare
+//         for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
+//             for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+//                 for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+//                     Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+//                     Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+//                     TBV[0] = fabs(W_x_L[0][m][Ixm] - W_x_R[0][m][Ixm]) + fabs(W_x_L[0][m][Ixp] - W_x_R[0][m][Ixp]); // TBV of MUSCL
+//                     TBV[1] = fabs(W_x_L[1][m][Ixm] - W_x_R[1][m][Ixm]) + fabs(W_x_L[1][m][Ixp] - W_x_R[1][m][Ixp]); // TBV of THINC
+//                     if (TBV[0] > TBV[1]){
+//                         BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+//                     }
+//                 }
+//             }
+//         }
         
-        // select numerical scheme which has smaller TBV value
-        for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
-            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
-                        Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
-                        Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
-                        W_x_L[0][m][Ixp] = W_x_L[1][m][Ixp];
-                        W_x_R[0][m][Ixm] = W_x_R[1][m][Ixm];
-                    }
-                }
-            }
-        }
-    }
-}
+//         // select numerical scheme which has smaller TBV value
+//         for (i = ngx - BVD_s; i < ngx + nx + BVD_s; i++){ // each cell in x-direction
+//             for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+//                 for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+//                     if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
+//                         Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+//                         Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+//                         W_x_L[0][m][Ixp] = W_x_L[1][m][Ixp];
+//                         W_x_R[0][m][Ixm] = W_x_R[1][m][Ixm];
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
 
-void BVD_selection_y(int rk){
-    int i, j, k, m, Iym, Iyp;
-    double TBV[2];
-    int d = 1; // y-direction
+// void BVD_selection_y(int rk){
+//     int i, j, k, m, Iym, Iyp;
+//     double TBV[2];
+//     int d = 1; // y-direction
     
-    for (m = 0; m < num_var; m++){
-        // calculate TBV (Total Boundary Variation) and compare
-        for (j = ngy - BVD_s; j < ngy + ny + BVD_s; j++){ // each cell in y-direction
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                    Iym = I_y(i, j, k); // index of cell boundary at x_{i-1/2}
-                    Iyp = I_y(i, j + 1, k); // index of cell boundary at x_{i+1/2}
-                    TBV[0] = fabs(W_y_L[0][m][Iym] - W_y_R[0][m][Iym]) + fabs(W_y_L[0][m][Iyp] - W_y_R[0][m][Iyp]); // TBV of MUSCL
-                    TBV[1] = fabs(W_y_L[1][m][Iym] - W_y_R[1][m][Iym]) + fabs(W_y_L[1][m][Iyp] - W_y_R[1][m][Iyp]); // TBV of THINC
-                    if (TBV[0] > TBV[1]){
-                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
-                    }
-                }
-            }
-        }
+//     for (m = 0; m < num_var; m++){
+//         // calculate TBV (Total Boundary Variation) and compare
+//         for (j = ngy - BVD_s; j < ngy + ny + BVD_s; j++){ // each cell in y-direction
+//             for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+//                 for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+//                     Iym = I_y(i, j, k); // index of cell boundary at x_{i-1/2}
+//                     Iyp = I_y(i, j + 1, k); // index of cell boundary at x_{i+1/2}
+//                     TBV[0] = fabs(W_y_L[0][m][Iym] - W_y_R[0][m][Iym]) + fabs(W_y_L[0][m][Iyp] - W_y_R[0][m][Iyp]); // TBV of MUSCL
+//                     TBV[1] = fabs(W_y_L[1][m][Iym] - W_y_R[1][m][Iym]) + fabs(W_y_L[1][m][Iyp] - W_y_R[1][m][Iyp]); // TBV of THINC
+//                     if (TBV[0] > TBV[1]){
+//                         BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+//                     }
+//                 }
+//             }
+//         }
         
-        // select numerical scheme which has smaller TBV value
-        for (j = ngy - BVD_s; j < ngy + ny + BVD_s; j++){ // each cell in y-direction
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
-                        Iym = I_y(i, j, k); // index of cell boundary at x_{i-1/2}
-                        Iyp = I_y(i, j + 1, k); // index of cell boundary at x_{i+1/2}
-                        W_y_L[0][m][Iyp] = W_y_L[1][m][Iyp];
-                        W_y_R[0][m][Iym] = W_y_R[1][m][Iym];
-                    }
-                }
-            }
-        }
-    }
-}
+//         // select numerical scheme which has smaller TBV value
+//         for (j = ngy - BVD_s; j < ngy + ny + BVD_s; j++){ // each cell in y-direction
+//             for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+//                 for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+//                     if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
+//                         Iym = I_y(i, j, k); // index of cell boundary at x_{i-1/2}
+//                         Iyp = I_y(i, j + 1, k); // index of cell boundary at x_{i+1/2}
+//                         W_y_L[0][m][Iyp] = W_y_L[1][m][Iyp];
+//                         W_y_R[0][m][Iym] = W_y_R[1][m][Iym];
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
 
-void BVD_selection_z(int rk){
-    int i, j, k, m, Izm, Izp;
-    double TBV[2];
-    int d = 2; // z-direction
+// void BVD_selection_z(int rk){
+//     int i, j, k, m, Izm, Izp;
+//     double TBV[2];
+//     int d = 2; // z-direction
     
-    for (m = 0; m < num_var; m++){
-        // calculate TBV (Total Boundary Variation) and compare
-        for (k = ngz - BVD_s; k < ngz + nz + BVD_s; k++){ // each cell in z-direction
-            for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                    Izm = I_z(i, j, k); // index of cell boundary at x_{i-1/2}
-                    Izp = I_z(i, j, k + 1); // index of cell boundary at x_{i+1/2}
-                    TBV[0] = fabs(W_z_L[0][m][Izm] - W_z_R[0][m][Izm]) + fabs(W_z_L[0][m][Izp] - W_z_R[0][m][Izp]); // TBV of MUSCL
-                    TBV[1] = fabs(W_z_L[1][m][Izm] - W_z_R[1][m][Izm]) + fabs(W_z_L[1][m][Izp] - W_z_R[1][m][Izp]); // TBV of THINC
-                    if (TBV[0] > TBV[1]){
-                        BVD_active[d][rk][m][I_c(i, j, k)] = 1;
-                    }
-                }
-            }
-        }
+//     for (m = 0; m < num_var; m++){
+//         // calculate TBV (Total Boundary Variation) and compare
+//         for (k = ngz - BVD_s; k < ngz + nz + BVD_s; k++){ // each cell in z-direction
+//             for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+//                 for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+//                     Izm = I_z(i, j, k); // index of cell boundary at x_{i-1/2}
+//                     Izp = I_z(i, j, k + 1); // index of cell boundary at x_{i+1/2}
+//                     TBV[0] = fabs(W_z_L[0][m][Izm] - W_z_R[0][m][Izm]) + fabs(W_z_L[0][m][Izp] - W_z_R[0][m][Izp]); // TBV of MUSCL
+//                     TBV[1] = fabs(W_z_L[1][m][Izm] - W_z_R[1][m][Izm]) + fabs(W_z_L[1][m][Izp] - W_z_R[1][m][Izp]); // TBV of THINC
+//                     if (TBV[0] > TBV[1]){
+//                         BVD_active[d][rk][m][I_c(i, j, k)] = 1;
+//                     }
+//                 }
+//             }
+//         }
         
-        // select numerical scheme which has smaller TBV value
-        for (k = ngz - BVD_s; k < ngz + nz + BVD_s; k++){ // each cell in z-direction
-            for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                    if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
-                        Izm = I_z(i, j, k); // index of cell boundary at x_{i-1/2}
-                        Izp = I_z(i, j, k + 1); // index of cell boundary at x_{i+1/2}
-                        W_z_L[0][m][Izp] = W_z_L[1][m][Izp];
-                        W_z_R[0][m][Izm] = W_z_R[1][m][Izm];
-                    }
-                }
-            }
-        }
-    }
-}
+//         // select numerical scheme which has smaller TBV value
+//         for (k = ngz - BVD_s; k < ngz + nz + BVD_s; k++){ // each cell in z-direction
+//             for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+//                 for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+//                     if (BVD_active[d][rk][m][I_c(i, j, k)] == 1){
+//                         Izm = I_z(i, j, k); // index of cell boundary at x_{i-1/2}
+//                         Izp = I_z(i, j, k + 1); // index of cell boundary at x_{i+1/2}
+//                         W_z_L[0][m][Izp] = W_z_L[1][m][Izp];
+//                         W_z_R[0][m][Izm] = W_z_R[1][m][Izm];
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
 
 // void bvc_Euler_x(int b){
 //     int i, m;
@@ -1284,337 +1286,715 @@ void BVD_selection_z(int rk){
     
 // }
 
-void Riemann_solver_5eq_HLLC(double *MWS_x, double *MWS_y, double *MWS_z){
+void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const vec3d& W_R, vec2d& Amdq, vec2d& Apdq, vec2d& Adq){
     int i,j,k,m;
-    double mws_x=0.0, mws_y=0.0, mws_z=0.0;
+    double mws_d=0.0;
     
-    //  Riemann solver in x-direction
-    if (dim>=1){
-        #pragma omp parallel
-        {
-            int Ix, Ixm, Ixp, Ic;
-            double alpha1_L, alpha2_L, rho1_L, rho2_L, u_L, v_L, w_L, S_L, Y1_L, rho_L, p_L, c_L, S_ratio_L;
-            double alpha1rho1_L, alpha2rho2_L, rhou_L, rhov_L, rhow_L, rhoE_L, cc1_L, cc2_L;
-            vec1d U_L(num_var), F_L(num_var), U_Lstar(num_var);
-            double alpha1_R, alpha2_R, rho1_R, rho2_R, u_R, v_R, w_R, S_R, Y1_R, rho_R, p_R, c_R, S_ratio_R;
-            double alpha1rho1_R, alpha2rho2_R, rhou_R, rhov_R, rhow_R, rhoE_R, cc1_R, cc2_R;
-            vec1d U_R(num_var), F_R(num_var), U_Rstar(num_var);
-            double S_star;
-            
-            double S_L_plus, S_L_minus, S_s_plus, S_s_minus, S_R_plus, S_R_minus;
-            
-            double W1, W2, W3;
-            double kappa;
-            
-            // calculate fluctuation at cell boundary
-            #pragma omp for private(j,k,m) reduction(max:mws_x)
-            for (i=ngx;i<ngx+nx+1;i++){ // each cell boundary in x-direction
-                for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
-                    for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
-                        Ix=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
-                        
-                        // left-side cell boundary value
-                        alpha1_L=W_x_L[0][0][Ix];
-                        alpha2_L=1.0-alpha1_L;
-                        rho1_L=W_x_L[0][1][Ix];
-                        rho2_L=W_x_L[0][2][Ix];
-                        u_L=W_x_L[0][3][Ix];
-                        v_L=W_x_L[0][4][Ix];
-                        w_L=W_x_L[0][5][Ix];
-                        p_L=W_x_L[0][6][Ix];
-                        // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
-                        //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
-                        prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
-                                        alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
-                        rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
-                        Y1_L=alpha1_L*rho1_L/rho_L;
-                        if (sound_speed_type==1){
-                            // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
-                            // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
-                            // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
-                            cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
-                            cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
-                            // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
-                            c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
-                        }
-                        else if (sound_speed_type==2){
-                            double gamma=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
-                            double p_ref=(gamma-1.0)/gamma*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
-                            c_L=sqrt(gamma*(p_L+p_ref)/rho_L);
-                        }
-                        // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
-                        if (isnan(c_L) && 0){
-                            printf("c_L is nan @HLLC_x\n");
-                            printf("t=%f, t_step=%d, cell boundary:(%d-%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,i-ngx,i+1-ngx,j-ngy,k-ngz,alpha1_L,alpha2_L,p_L,rho_L);
-                            getchar();
-                        }
-                        
-                        // right-side cell boundary value
-                        alpha1_R=W_x_R[0][0][Ix];
-                        alpha2_R=1.0-alpha1_R;
-                        rho1_R=W_x_R[0][1][Ix];
-                        rho2_R=W_x_R[0][2][Ix];
-                        u_R=W_x_R[0][3][Ix];
-                        v_R=W_x_R[0][4][Ix];
-                        w_R=W_x_R[0][5][Ix];
-                        p_R=W_x_R[0][6][Ix];
-                        // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
-                        //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
-                        prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
-                                        alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
-                        //
-                        rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
-                        Y1_R=alpha1_R*rho1_R/rho_R;
-                        if (sound_speed_type==1){
-                            // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
-                            // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
-                            // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
-                            cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
-                            cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
-                            // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
-                            c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
-                        }
-                        else if (sound_speed_type==2){
-                            double gamma=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
-                            double p_ref=(gamma-1.0)/gamma*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
-                            c_R=sqrt(gamma*(p_R+p_ref)/rho_R);
-                        }
-                        // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
-                        if (isnan(c_R) && 0){
-                            printf("c_R is nan @HLLC_x\n");
-                            printf("t=%f, t_step=%d, cell boundary:(%d-%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,i-ngx,i+1-ngx,j-ngy,k-ngz,alpha1_R,alpha2_R,p_R,rho_R);
-                            getchar();
-                        }
-                        
-                        // curvature at the cell boundary
-                        if (surface_tension_type>=1) kappa=0.5*(curv[I_c(i-1,j,k)]+curv[I_c(i,j,k)]);
-                        else kappa=0.0;
-                        
-                        // Direct Wave Speed Estimates
-                        // S_L=min(u_L-c_L,u_R-c_R);
-                        // S_R=max(u_L+c_L,u_R+c_R);
-                        S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
-                        S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
-                        if (isnan(S_L) || isnan(S_R)) {
-                            printf("SLR nan@xb"); getchar();
-                        }
-                        
-                        // Max Wave Speed
-                        mws_x=max({mws_x,fabs(S_L),fabs(S_R)});
-
-                        // contact discontinuity speed
-                        S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
-                                /
-                                (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
-
-                        // HLLC solution
-                        U_L[0]=alpha1_L;
-                        U_L[1]=alpha1_L*rho1_L;
-                        U_L[2]=alpha2_L*rho2_L;
-                        U_L[3]=rho_L*u_L;
-                        U_L[4]=rho_L*v_L;
-                        U_L[5]=rho_L*w_L;
-                        U_L[6]=rhoE_L;
-                        F_L[0]=alpha1_L*u_L;
-                        F_L[1]=alpha1_L*rho1_L*u_L;
-                        F_L[2]=alpha2_L*rho2_L*u_L;
-                        F_L[3]=p_L+rho_L*u_L*u_L;
-                        F_L[4]=rho_L*v_L*u_L;
-                        F_L[5]=rho_L*w_L*u_L;
-                        F_L[6]=(rhoE_L+p_L)*u_L;
-                        S_ratio_L=(S_L-u_L)/(S_L-S_star);
-                        U_Lstar[0]=alpha1_L;
-                        U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
-                        U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
-                        U_Lstar[3]=rho_L*S_star*S_ratio_L;
-                        U_Lstar[4]=rho_L*v_L*S_ratio_L;
-                        U_Lstar[5]=rho_L*w_L*S_ratio_L;
-                        U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
-                        
-                        U_R[0]=alpha1_R;
-                        U_R[1]=alpha1_R*rho1_R;
-                        U_R[2]=alpha2_R*rho2_R;
-                        U_R[3]=rho_R*u_R;
-                        U_R[4]=rho_R*v_R;
-                        U_R[5]=rho_R*w_R;
-                        U_R[6]=rhoE_R;
-                        F_R[0]=alpha1_R*u_R;
-                        F_R[1]=alpha1_R*rho1_R*u_R;
-                        F_R[2]=alpha2_R*rho2_R*u_R;
-                        F_R[3]=p_R+rho_R*u_R*u_R;
-                        F_R[4]=rho_R*v_R*u_R;
-                        F_R[5]=rho_R*w_R*u_R;
-                        F_R[6]=(rhoE_R+p_R)*u_R;
-                        S_ratio_R=(S_R-u_R)/(S_R-S_star);
-                        U_Rstar[0]=alpha1_R;
-                        U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
-                        U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
-                        U_Rstar[3]=rho_R*S_star*S_ratio_R;
-                        U_Rstar[4]=rho_R*v_R*S_ratio_R;
-                        U_Rstar[5]=rho_R*w_R*S_ratio_R;
-                        U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
-
-                        // calculate fluctuation at cell boundary
-                        S_L_plus=max(S_L,0.0);
-                        S_L_minus=min(S_L,0.0);
-                        S_s_plus=max(S_star,0.0);
-                        S_s_minus=min(S_star,0.0);
-                        S_R_plus=max(S_R,0.0);
-                        S_R_minus=min(S_R,0.0);
-                        for (m=0;m<num_var;m++){
-                            W1=U_Lstar[m]-U_L[m];
-                            W2=U_Rstar[m]-U_Lstar[m];
-                            W3=U_R[m]-U_Rstar[m];
-                            Apdq_x[m][Ix] = (S_L_plus * W1 + S_R_plus * W3) + S_s_plus * W2;
-                            Amdq_x[m][Ix] = (S_L_minus * W1 + S_R_minus * W3) + S_s_minus * W2;
-                        }
+    //  Riemann solver in d-direction
+    #pragma omp parallel
+    {
+        int Ib, Ibm, Ibp, Ic, Icm, Icp;
+        double alpha1_L, alpha2_L, rho1_L, rho2_L, u_L, v_L, w_L, S_L, Y1_L, rho_L, p_L, c_L, S_ratio_L;
+        double alpha1rho1_L, alpha2rho2_L, rhou_L, rhov_L, rhow_L, rhoE_L, cc1_L, cc2_L;
+        vec1d U_L(num_var), F_L(num_var), U_Lstar(num_var);
+        double alpha1_R, alpha2_R, rho1_R, rho2_R, u_R, v_R, w_R, S_R, Y1_R, rho_R, p_R, c_R, S_ratio_R;
+        double alpha1rho1_R, alpha2rho2_R, rhou_R, rhov_R, rhow_R, rhoE_R, cc1_R, cc2_R;
+        vec1d U_R(num_var), F_R(num_var), U_Rstar(num_var);
+        double S_star;
+        double gamma_mix, p_ref;
+        
+        vec1d velocity(3);
+        int id0 = d, id1 = (d + 1) % 3, id2 = (d + 2) % 3; // indices for velocity components
+        // vec1d Amdq_n(num_var), Apdq_n(num_var), Adq_n(num_var); // fluctuations at permutated bases
+        vec1i m_list = {0, 1, 2, 3 + id0, 3 + id1, 3 + id2, 6}; // indices for variables
+        
+        double S_L_plus, S_L_minus, S_s_plus, S_s_minus, S_R_plus, S_R_minus;
+        double W1, W2, W3;
+        
+        double kappa;
+        
+        // calculate fluctuation at cell boundary
+        #pragma omp for collapse(3) private(j,i,m) reduction(max:mws_d)
+        for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+            for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
+                for (i=ngx;i<ngx+nx+1;i++){ // each cell boundary in x-direction
+                    // Ib=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
+                    switch (d) {
+                        case 0:
+                            Ib = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                            break;
+                        case 1:
+                            Ib = I_y(i, j, k); // index of cell boundary at y_{j-1/2}
+                            break;
+                        case 2:
+                            Ib = I_z(i, j, k); // index of cell boundary at z_{k-1/2}
+                            break;
                     }
-                }
-            }
-            
-            // calculate fluctuation at cell inside
-            #pragma omp for private(j,k,m)
-            for (i=ngx;i<ngx+nx;i++){ // each cell in x-direction
-                for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
-                    for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
-                        Ixm=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
-                        Ixp=I_x(i+1,j,k); // index of cell boundary at x_{i+1/2}
-                        // Adq=s(1)W(1)+s(2)W(2)+s(3)W(3)
-                        
-                        // left-side cell boundary value
-                        alpha1_L=W_x_R[0][0][Ixm];
-                        alpha2_L=1.0-alpha1_L;
-                        rho1_L=W_x_R[0][1][Ixm];
-                        rho2_L=W_x_R[0][2][Ixm];
-                        u_L=W_x_R[0][3][Ixm];
-                        v_L=W_x_R[0][4][Ixm];
-                        w_L=W_x_R[0][5][Ixm];
-                        p_L=W_x_R[0][6][Ixm];
-                        // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
-                        //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
-                        prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
-                            alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
-                        rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
-                        Y1_L=alpha1_L*rho1_L/rho_L;
-                        if (sound_speed_type==1){
-                            // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
-                            // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
-                            // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
-                            cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
-                            cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
-                            c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
-                            // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
-                        }
-                        else if (sound_speed_type==2){
-                            double gamma=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
-                            double p_ref=(gamma-1.0)/gamma*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
-                            c_L=sqrt(gamma*(p_L+p_ref)/rho_L);
-                        }
-                        // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
-                        
-                        // right-side cell boundary value
-                        alpha1_R=W_x_L[0][0][Ixp];
-                        alpha2_R=1.0-alpha1_R;
-                        rho1_R=W_x_L[0][1][Ixp];
-                        rho2_R=W_x_L[0][2][Ixp];
-                        u_R=W_x_L[0][3][Ixp];
-                        v_R=W_x_L[0][4][Ixp];
-                        w_R=W_x_L[0][5][Ixp];
-                        p_R=W_x_L[0][6][Ixp];
-                        // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
-                        //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
-                        prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
-                            alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
-                        rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
-                        Y1_R=alpha1_R*rho1_R/rho_R;
-                        if (sound_speed_type==1){
-                            // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
-                            // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
-                            // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
-                            cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
-                            cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
-                            c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
-                            // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
-                        }
-                        else if (sound_speed_type==2){
-                            double gamma=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
-                            double p_ref=(gamma-1.0)/gamma*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
-                            c_R=sqrt(gamma*(p_R+p_ref)/rho_R);
-                        }
-                        // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
-                        
-                        if (surface_tension_type>=1) kappa=curv[I_c(i,j,k)];
-                        else kappa=0.0;
-                        
-                        // Direct Wave Speed Estimates
-                        // S_L=min(u_L-c_L,u_R-c_R);
-                        // S_R=max(u_L+c_L,u_R+c_R);
-                        S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
-                        S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
-                        if (isnan(S_L) || isnan(S_R)) {
-                            printf("SLR nan@xc"); getchar();
-                        }
-                        
-                        // Maximum Wave Speed
-                        // if (mwsx<max(fabs(S_L),fabs(S_R))){
-                        //     mwsx=max(fabs(S_L),fabs(S_R));
-                        // }
+                    
+                    // left-side cell boundary value
+                    alpha1_L=W_L[0][0][Ib];
+                    alpha2_L=1.0-alpha1_L;
+                    rho1_L=W_L[0][1][Ib];
+                    rho2_L=W_L[0][2][Ib];
+                    u_L=W_L[0][3][Ib];
+                    v_L=W_L[0][4][Ib];
+                    w_L=W_L[0][5][Ib];
+                    p_L=W_L[0][6][Ib];
+                    // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
+                    //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
+                    prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
+                                    alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
+                    rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
+                    Y1_L=alpha1_L*rho1_L/rho_L;
+                    if (sound_speed_type==1){
+                        // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
+                        // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
+                        // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
+                        cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                        cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                        // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                        c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                    }
+                    else if (sound_speed_type==2){
+                        gamma_mix=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
+                        p_ref=(gamma_mix-1.0)/gamma_mix*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
+                        c_L=sqrt(gamma_mix*(p_L+p_ref)/rho_L);
+                    }
+                    // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
+                    if (isnan(c_L) && 0){
+                        printf("c_L is nan @HLLC\n");
+                        printf("t=%f, t_step=%d, dim=%d, cell boundary:(%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,d,i-ngx,j-ngy,k-ngz,alpha1_L,alpha2_L,p_L,rho_L);
+                        getchar();
+                    }
+                    
+                    // right-side cell boundary value
+                    alpha1_R=W_R[0][0][Ib];
+                    alpha2_R=1.0-alpha1_R;
+                    rho1_R=W_R[0][1][Ib];
+                    rho2_R=W_R[0][2][Ib];
+                    u_R=W_R[0][3][Ib];
+                    v_R=W_R[0][4][Ib];
+                    w_R=W_R[0][5][Ib];
+                    p_R=W_R[0][6][Ib];
+                    // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
+                    //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
+                    prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
+                                    alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
+                    //
+                    rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
+                    Y1_R=alpha1_R*rho1_R/rho_R;
+                    if (sound_speed_type==1){
+                        // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
+                        // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
+                        // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
+                        cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                        cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                        // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                        c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                    }
+                    else if (sound_speed_type==2){
+                        gamma_mix=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
+                        p_ref=(gamma_mix-1.0)/gamma_mix*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
+                        c_R=sqrt(gamma_mix*(p_R+p_ref)/rho_R);
+                    }
+                    // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
+                    if (isnan(c_R) && 0){
+                        printf("c_R is nan @HLLC_x\n");
+                        printf("t=%f, t_step=%d, dim=%d, cell boundary:(%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,d,i-ngx,j-ngy,k-ngz,alpha1_R,alpha2_R,p_R,rho_R);
+                        getchar();
+                    }
+                    
+                    // permutation of bases of velocity vector
+                    velocity = {u_L, v_L, w_L};
+                    u_L = velocity[id0];
+                    v_L = velocity[id1];
+                    w_L = velocity[id2];
+                    velocity = {u_R, v_R, w_R};
+                    u_R = velocity[id0];
+                    v_R = velocity[id1];
+                    w_R = velocity[id2];
+                    
+                    // curvature at the cell boundary
+                    switch (d) {
+                        case 0:
+                            Icm = I_c(i - 1, j, k);
+                            break;
+                        case 1:
+                            Icm = I_c(i, j - 1, k);
+                            break;
+                        case 2:
+                            Icm = I_c(i, j, k - 1);
+                            break;
+                    }
+                    Icp = I_c(i, j, k); // index of cell center at (i,j,k)
+                    if (surface_tension_type>=1) kappa=0.5*(curv[Icm]+curv[Icp]);
+                    else kappa=0.0;
+                    
+                    // Direct Wave Speed Estimates
+                    // S_L=min(u_L-c_L,u_R-c_R);
+                    // S_R=max(u_L+c_L,u_R+c_R);
+                    S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
+                    S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
+                    if (isnan(S_L) || isnan(S_R)) {
+                        printf("SLR nan@xb"); getchar();
+                    }
+                    
+                    // Max Wave Speed
+                    mws_d=max({mws_d,fabs(S_L),fabs(S_R)});
 
-                        // contact discontinuity speed
-                        S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
-                                /
-                                (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
+                    // contact discontinuity speed
+                    S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
+                            /
+                            (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
 
-                        // HLLC solution
-                        U_L[0]=alpha1_L;
-                        U_L[1]=alpha1_L*rho1_L;
-                        U_L[2]=alpha2_L*rho2_L;
-                        U_L[3]=rho_L*u_L;
-                        U_L[4]=rho_L*v_L;
-                        U_L[5]=rho_L*w_L;
-                        U_L[6]=rhoE_L;
-                        S_ratio_L=(S_L-u_L)/(S_L-S_star);
-                        U_Lstar[0]=alpha1_L;//*S_ratio_L;
-                        U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
-                        U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
-                        U_Lstar[3]=rho_L*S_star*S_ratio_L;
-                        U_Lstar[4]=rho_L*v_L*S_ratio_L;
-                        U_Lstar[5]=rho_L*w_L*S_ratio_L;
-                        U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
-                        
-                        U_R[0]=alpha1_R;
-                        U_R[1]=alpha1_R*rho1_R;
-                        U_R[2]=alpha2_R*rho2_R;
-                        U_R[3]=rho_R*u_R;
-                        U_R[4]=rho_R*v_R;
-                        U_R[5]=rho_R*w_R;
-                        U_R[6]=rhoE_R;
-                        S_ratio_R=(S_R-u_R)/(S_R-S_star);
-                        U_Rstar[0]=alpha1_R;//*S_ratio_R;
-                        U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
-                        U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
-                        U_Rstar[3]=rho_R*S_star*S_ratio_R;
-                        U_Rstar[4]=rho_R*v_R*S_ratio_R;
-                        U_Rstar[5]=rho_R*w_R*S_ratio_R;
-                        U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
-                        
-                        // calculate fluctuation at cell inside
-                        Ic = I_c(i,j,k); // index of cell
-                        for (m=0;m<num_var;m++){
-                            W1=U_Lstar[m]-U_L[m];
-                            W2=U_Rstar[m]-U_Lstar[m];
-                            W3=U_R[m]-U_Rstar[m];
-                            Adq_x[m][Ic]=(S_L*W1+S_R*W3)+S_star*W2;
-                        }
+                    // HLLC solution
+                    U_L[0]=alpha1_L;
+                    U_L[1]=alpha1_L*rho1_L;
+                    U_L[2]=alpha2_L*rho2_L;
+                    U_L[3]=rho_L*u_L;
+                    U_L[4]=rho_L*v_L;
+                    U_L[5]=rho_L*w_L;
+                    U_L[6]=rhoE_L;
+                    F_L[0]=alpha1_L*u_L;
+                    F_L[1]=alpha1_L*rho1_L*u_L;
+                    F_L[2]=alpha2_L*rho2_L*u_L;
+                    F_L[3]=p_L+rho_L*u_L*u_L;
+                    F_L[4]=rho_L*v_L*u_L;
+                    F_L[5]=rho_L*w_L*u_L;
+                    F_L[6]=(rhoE_L+p_L)*u_L;
+                    S_ratio_L=(S_L-u_L)/(S_L-S_star);
+                    U_Lstar[0]=alpha1_L;
+                    U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
+                    U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
+                    U_Lstar[3]=rho_L*S_star*S_ratio_L;
+                    U_Lstar[4]=rho_L*v_L*S_ratio_L;
+                    U_Lstar[5]=rho_L*w_L*S_ratio_L;
+                    U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
+                    
+                    U_R[0]=alpha1_R;
+                    U_R[1]=alpha1_R*rho1_R;
+                    U_R[2]=alpha2_R*rho2_R;
+                    U_R[3]=rho_R*u_R;
+                    U_R[4]=rho_R*v_R;
+                    U_R[5]=rho_R*w_R;
+                    U_R[6]=rhoE_R;
+                    F_R[0]=alpha1_R*u_R;
+                    F_R[1]=alpha1_R*rho1_R*u_R;
+                    F_R[2]=alpha2_R*rho2_R*u_R;
+                    F_R[3]=p_R+rho_R*u_R*u_R;
+                    F_R[4]=rho_R*v_R*u_R;
+                    F_R[5]=rho_R*w_R*u_R;
+                    F_R[6]=(rhoE_R+p_R)*u_R;
+                    S_ratio_R=(S_R-u_R)/(S_R-S_star);
+                    U_Rstar[0]=alpha1_R;
+                    U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
+                    U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
+                    U_Rstar[3]=rho_R*S_star*S_ratio_R;
+                    U_Rstar[4]=rho_R*v_R*S_ratio_R;
+                    U_Rstar[5]=rho_R*w_R*S_ratio_R;
+                    U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
+
+                    // calculate fluctuation at cell boundary
+                    S_L_plus=max(S_L,0.0);
+                    S_L_minus=min(S_L,0.0);
+                    S_s_plus=max(S_star,0.0);
+                    S_s_minus=min(S_star,0.0);
+                    S_R_plus=max(S_R,0.0);
+                    S_R_minus=min(S_R,0.0);
+                    for (m=0;m<num_var;m++){
+                        W1=U_Lstar[m]-U_L[m];
+                        W2=U_Rstar[m]-U_Lstar[m];
+                        W3=U_R[m]-U_Rstar[m];
+                        Apdq[m_list[m]][Ib] = (S_L_plus * W1 + S_R_plus * W3) + S_s_plus * W2;
+                        Amdq[m_list[m]][Ib] = (S_L_minus * W1 + S_R_minus * W3) + S_s_minus * W2;
                     }
                 }
             }
         }
-        *MWS_x = mws_x;
+        
+        // calculate fluctuation at cell inside
+        #pragma omp for collapse(3) private(j,i,m)
+        for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+            for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
+                for (i=ngx;i<ngx+nx;i++){ // each cell in x-direction
+                    // Ixm=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
+                    // Ixp=I_x(i+1,j,k); // index of cell boundary at x_{i+1/2}
+                    get_cb_indices_from_cc(d, i, j, k, Ibm, Ibp); // get cell-boundary index
+                    // Adq=s(1)W(1)+s(2)W(2)+s(3)W(3)
+                    
+                    // left-side cell boundary value
+                    alpha1_L=W_R[0][0][Ibm];
+                    alpha2_L=1.0-alpha1_L;
+                    rho1_L=W_R[0][1][Ibm];
+                    rho2_L=W_R[0][2][Ibm];
+                    u_L=W_R[0][3][Ibm];
+                    v_L=W_R[0][4][Ibm];
+                    w_L=W_R[0][5][Ibm];
+                    p_L=W_R[0][6][Ibm];
+                    // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
+                    //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
+                    prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
+                        alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
+                    rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
+                    Y1_L=alpha1_L*rho1_L/rho_L;
+                    if (sound_speed_type==1){
+                        // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
+                        // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
+                        // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
+                        cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                        cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                        c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                        // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+                    }
+                    else if (sound_speed_type==2){
+                        gamma_mix=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
+                        p_ref=(gamma_mix-1.0)/gamma_mix*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
+                        c_L=sqrt(gamma_mix*(p_L+p_ref)/rho_L);
+                    }
+                    // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
+                    
+                    // right-side cell boundary value
+                    alpha1_R=W_L[0][0][Ibp];
+                    alpha2_R=1.0-alpha1_R;
+                    rho1_R=W_L[0][1][Ibp];
+                    rho2_R=W_L[0][2][Ibp];
+                    u_R=W_L[0][3][Ibp];
+                    v_R=W_L[0][4][Ibp];
+                    w_R=W_L[0][5][Ibp];
+                    p_R=W_L[0][6][Ibp];
+                    // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
+                    //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
+                    prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
+                        alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
+                    rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
+                    Y1_R=alpha1_R*rho1_R/rho_R;
+                    if (sound_speed_type==1){
+                        // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
+                        // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
+                        // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
+                        cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+                        cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+                        c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                        // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+                    }
+                    else if (sound_speed_type==2){
+                        gamma_mix=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
+                        p_ref=(gamma_mix-1.0)/gamma_mix*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
+                        c_R=sqrt(gamma_mix*(p_R+p_ref)/rho_R);
+                    }
+                    // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
+                    
+                    // permutation of bases of velocity vector
+                    velocity = {u_L, v_L, w_L};
+                    u_L = velocity[id0];
+                    v_L = velocity[id1];
+                    w_L = velocity[id2];
+                    velocity = {u_R, v_R, w_R};
+                    u_R = velocity[id0];
+                    v_R = velocity[id1];
+                    w_R = velocity[id2];
+                    
+                    if (surface_tension_type>=1) kappa=curv[I_c(i,j,k)];
+                    else kappa=0.0;
+                    
+                    // Direct Wave Speed Estimates
+                    // S_L=min(u_L-c_L,u_R-c_R);
+                    // S_R=max(u_L+c_L,u_R+c_R);
+                    S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
+                    S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
+                    if (isnan(S_L) || isnan(S_R)) {
+                        printf("SLR nan@xc"); getchar();
+                    }
+                    
+                    // Maximum Wave Speed
+                    // if (mwsx<max(fabs(S_L),fabs(S_R))){
+                    //     mwsx=max(fabs(S_L),fabs(S_R));
+                    // }
+
+                    // contact discontinuity speed
+                    S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
+                            /
+                            (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
+
+                    // HLLC solution
+                    U_L[0]=alpha1_L;
+                    U_L[1]=alpha1_L*rho1_L;
+                    U_L[2]=alpha2_L*rho2_L;
+                    U_L[3]=rho_L*u_L;
+                    U_L[4]=rho_L*v_L;
+                    U_L[5]=rho_L*w_L;
+                    U_L[6]=rhoE_L;
+                    S_ratio_L=(S_L-u_L)/(S_L-S_star);
+                    U_Lstar[0]=alpha1_L;//*S_ratio_L;
+                    U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
+                    U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
+                    U_Lstar[3]=rho_L*S_star*S_ratio_L;
+                    U_Lstar[4]=rho_L*v_L*S_ratio_L;
+                    U_Lstar[5]=rho_L*w_L*S_ratio_L;
+                    U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
+                    
+                    U_R[0]=alpha1_R;
+                    U_R[1]=alpha1_R*rho1_R;
+                    U_R[2]=alpha2_R*rho2_R;
+                    U_R[3]=rho_R*u_R;
+                    U_R[4]=rho_R*v_R;
+                    U_R[5]=rho_R*w_R;
+                    U_R[6]=rhoE_R;
+                    S_ratio_R=(S_R-u_R)/(S_R-S_star);
+                    U_Rstar[0]=alpha1_R;//*S_ratio_R;
+                    U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
+                    U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
+                    U_Rstar[3]=rho_R*S_star*S_ratio_R;
+                    U_Rstar[4]=rho_R*v_R*S_ratio_R;
+                    U_Rstar[5]=rho_R*w_R*S_ratio_R;
+                    U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
+                    
+                    // calculate fluctuation at cell inside
+                    Ic = I_c(i,j,k); // index of cell
+                    for (m=0;m<num_var;m++){
+                        W1=U_Lstar[m]-U_L[m];
+                        W2=U_Rstar[m]-U_Lstar[m];
+                        W3=U_R[m]-U_Rstar[m];
+                        Adq[m_list[m]][Ic]=(S_L*W1+S_R*W3)+S_star*W2;
+                    }
+                }
+            }
+        }
     }
-    
-    
+    *MWS_d = mws_d;
 }
+
+// void Riemann_solver_5eq_HLLC(double *MWS_x, double *MWS_y, double *MWS_z){
+//     int i,j,k,m;
+//     double mws_x=0.0, mws_y=0.0, mws_z=0.0;
+    
+//     //  Riemann solver in x-direction
+//     if (dim>=1){
+//         #pragma omp parallel
+//         {
+//             int Ix, Ixm, Ixp, Ic;
+//             double alpha1_L, alpha2_L, rho1_L, rho2_L, u_L, v_L, w_L, S_L, Y1_L, rho_L, p_L, c_L, S_ratio_L;
+//             double alpha1rho1_L, alpha2rho2_L, rhou_L, rhov_L, rhow_L, rhoE_L, cc1_L, cc2_L;
+//             vec1d U_L(num_var), F_L(num_var), U_Lstar(num_var);
+//             double alpha1_R, alpha2_R, rho1_R, rho2_R, u_R, v_R, w_R, S_R, Y1_R, rho_R, p_R, c_R, S_ratio_R;
+//             double alpha1rho1_R, alpha2rho2_R, rhou_R, rhov_R, rhow_R, rhoE_R, cc1_R, cc2_R;
+//             vec1d U_R(num_var), F_R(num_var), U_Rstar(num_var);
+//             double S_star;
+            
+//             double S_L_plus, S_L_minus, S_s_plus, S_s_minus, S_R_plus, S_R_minus;
+            
+//             double W1, W2, W3;
+//             double kappa;
+            
+//             // calculate fluctuation at cell boundary
+//             #pragma omp for private(j,k,m) reduction(max:mws_x)
+//             for (i=ngx;i<ngx+nx+1;i++){ // each cell boundary in x-direction
+//                 for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
+//                     for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+//                         Ix=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
+                        
+//                         // left-side cell boundary value
+//                         alpha1_L=W_x_L[0][0][Ix];
+//                         alpha2_L=1.0-alpha1_L;
+//                         rho1_L=W_x_L[0][1][Ix];
+//                         rho2_L=W_x_L[0][2][Ix];
+//                         u_L=W_x_L[0][3][Ix];
+//                         v_L=W_x_L[0][4][Ix];
+//                         w_L=W_x_L[0][5][Ix];
+//                         p_L=W_x_L[0][6][Ix];
+//                         // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
+//                         //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
+//                         prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
+//                                         alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
+//                         rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
+//                         Y1_L=alpha1_L*rho1_L/rho_L;
+//                         if (sound_speed_type==1){
+//                             // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
+//                             // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
+//                             // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
+//                             cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+//                             cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+//                             // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+//                             c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+//                         }
+//                         else if (sound_speed_type==2){
+//                             double gamma=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
+//                             double p_ref=(gamma-1.0)/gamma*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
+//                             c_L=sqrt(gamma*(p_L+p_ref)/rho_L);
+//                         }
+//                         // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
+//                         if (isnan(c_L) && 0){
+//                             printf("c_L is nan @HLLC_x\n");
+//                             printf("t=%f, t_step=%d, cell boundary:(%d-%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,i-ngx,i+1-ngx,j-ngy,k-ngz,alpha1_L,alpha2_L,p_L,rho_L);
+//                             getchar();
+//                         }
+                        
+//                         // right-side cell boundary value
+//                         alpha1_R=W_x_R[0][0][Ix];
+//                         alpha2_R=1.0-alpha1_R;
+//                         rho1_R=W_x_R[0][1][Ix];
+//                         rho2_R=W_x_R[0][2][Ix];
+//                         u_R=W_x_R[0][3][Ix];
+//                         v_R=W_x_R[0][4][Ix];
+//                         w_R=W_x_R[0][5][Ix];
+//                         p_R=W_x_R[0][6][Ix];
+//                         // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
+//                         //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
+//                         prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
+//                                         alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
+//                         //
+//                         rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
+//                         Y1_R=alpha1_R*rho1_R/rho_R;
+//                         if (sound_speed_type==1){
+//                             // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
+//                             // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
+//                             // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
+//                             cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+//                             cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+//                             // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+//                             c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+//                         }
+//                         else if (sound_speed_type==2){
+//                             double gamma=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
+//                             double p_ref=(gamma-1.0)/gamma*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
+//                             c_R=sqrt(gamma*(p_R+p_ref)/rho_R);
+//                         }
+//                         // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
+//                         if (isnan(c_R) && 0){
+//                             printf("c_R is nan @HLLC_x\n");
+//                             printf("t=%f, t_step=%d, cell boundary:(%d-%d,%d,%d), alpha1=%e, alpha2=%e, p=%e, rho=%e\n",t,t_step,i-ngx,i+1-ngx,j-ngy,k-ngz,alpha1_R,alpha2_R,p_R,rho_R);
+//                             getchar();
+//                         }
+                        
+//                         // curvature at the cell boundary
+//                         if (surface_tension_type>=1) kappa=0.5*(curv[I_c(i-1,j,k)]+curv[I_c(i,j,k)]);
+//                         else kappa=0.0;
+                        
+//                         // Direct Wave Speed Estimates
+//                         // S_L=min(u_L-c_L,u_R-c_R);
+//                         // S_R=max(u_L+c_L,u_R+c_R);
+//                         S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
+//                         S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
+//                         if (isnan(S_L) || isnan(S_R)) {
+//                             printf("SLR nan@xb"); getchar();
+//                         }
+                        
+//                         // Max Wave Speed
+//                         mws_x=max({mws_x,fabs(S_L),fabs(S_R)});
+
+//                         // contact discontinuity speed
+//                         S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
+//                                 /
+//                                 (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
+
+//                         // HLLC solution
+//                         U_L[0]=alpha1_L;
+//                         U_L[1]=alpha1_L*rho1_L;
+//                         U_L[2]=alpha2_L*rho2_L;
+//                         U_L[3]=rho_L*u_L;
+//                         U_L[4]=rho_L*v_L;
+//                         U_L[5]=rho_L*w_L;
+//                         U_L[6]=rhoE_L;
+//                         F_L[0]=alpha1_L*u_L;
+//                         F_L[1]=alpha1_L*rho1_L*u_L;
+//                         F_L[2]=alpha2_L*rho2_L*u_L;
+//                         F_L[3]=p_L+rho_L*u_L*u_L;
+//                         F_L[4]=rho_L*v_L*u_L;
+//                         F_L[5]=rho_L*w_L*u_L;
+//                         F_L[6]=(rhoE_L+p_L)*u_L;
+//                         S_ratio_L=(S_L-u_L)/(S_L-S_star);
+//                         U_Lstar[0]=alpha1_L;
+//                         U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
+//                         U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
+//                         U_Lstar[3]=rho_L*S_star*S_ratio_L;
+//                         U_Lstar[4]=rho_L*v_L*S_ratio_L;
+//                         U_Lstar[5]=rho_L*w_L*S_ratio_L;
+//                         U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
+                        
+//                         U_R[0]=alpha1_R;
+//                         U_R[1]=alpha1_R*rho1_R;
+//                         U_R[2]=alpha2_R*rho2_R;
+//                         U_R[3]=rho_R*u_R;
+//                         U_R[4]=rho_R*v_R;
+//                         U_R[5]=rho_R*w_R;
+//                         U_R[6]=rhoE_R;
+//                         F_R[0]=alpha1_R*u_R;
+//                         F_R[1]=alpha1_R*rho1_R*u_R;
+//                         F_R[2]=alpha2_R*rho2_R*u_R;
+//                         F_R[3]=p_R+rho_R*u_R*u_R;
+//                         F_R[4]=rho_R*v_R*u_R;
+//                         F_R[5]=rho_R*w_R*u_R;
+//                         F_R[6]=(rhoE_R+p_R)*u_R;
+//                         S_ratio_R=(S_R-u_R)/(S_R-S_star);
+//                         U_Rstar[0]=alpha1_R;
+//                         U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
+//                         U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
+//                         U_Rstar[3]=rho_R*S_star*S_ratio_R;
+//                         U_Rstar[4]=rho_R*v_R*S_ratio_R;
+//                         U_Rstar[5]=rho_R*w_R*S_ratio_R;
+//                         U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
+
+//                         // calculate fluctuation at cell boundary
+//                         S_L_plus=max(S_L,0.0);
+//                         S_L_minus=min(S_L,0.0);
+//                         S_s_plus=max(S_star,0.0);
+//                         S_s_minus=min(S_star,0.0);
+//                         S_R_plus=max(S_R,0.0);
+//                         S_R_minus=min(S_R,0.0);
+//                         for (m=0;m<num_var;m++){
+//                             W1=U_Lstar[m]-U_L[m];
+//                             W2=U_Rstar[m]-U_Lstar[m];
+//                             W3=U_R[m]-U_Rstar[m];
+//                             Apdq_x[m][Ix] = (S_L_plus * W1 + S_R_plus * W3) + S_s_plus * W2;
+//                             Amdq_x[m][Ix] = (S_L_minus * W1 + S_R_minus * W3) + S_s_minus * W2;
+//                         }
+//                     }
+//                 }
+//             }
+            
+//             // calculate fluctuation at cell inside
+//             #pragma omp for private(j,k,m)
+//             for (i=ngx;i<ngx+nx;i++){ // each cell in x-direction
+//                 for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
+//                     for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+//                         Ixm=I_x(i,j,k); // index of cell boundary at x_{i-1/2}
+//                         Ixp=I_x(i+1,j,k); // index of cell boundary at x_{i+1/2}
+//                         // Adq=s(1)W(1)+s(2)W(2)+s(3)W(3)
+                        
+//                         // left-side cell boundary value
+//                         alpha1_L=W_x_R[0][0][Ixm];
+//                         alpha2_L=1.0-alpha1_L;
+//                         rho1_L=W_x_R[0][1][Ixm];
+//                         rho2_L=W_x_R[0][2][Ixm];
+//                         u_L=W_x_R[0][3][Ixm];
+//                         v_L=W_x_R[0][4][Ixm];
+//                         w_L=W_x_R[0][5][Ixm];
+//                         p_L=W_x_R[0][6][Ixm];
+//                         // rhoE_L=alpha1_L*((p_L+gamma1*pi1)/(gamma1-1.0)+rho1_L*eta1+0.5*rho1_L*q2(u_L,v_L,w_L))
+//                         //     +alpha2_L*((p_L+gamma2*pi2)/(gamma2-1.0)+rho2_L*eta2+0.5*rho2_L*q2(u_L,v_L,w_L));
+//                         prim_to_cons_5eq(&alpha1rho1_L,&alpha2rho2_L,&rhou_L,&rhov_L,&rhow_L,&rhoE_L,
+//                             alpha1_L,rho1_L,rho2_L,u_L,v_L,w_L,p_L);
+//                         rho_L=alpha1_L*rho1_L+alpha2_L*rho2_L;
+//                         Y1_L=alpha1_L*rho1_L/rho_L;
+//                         if (sound_speed_type==1){
+//                             // c_L=sqrt(Y1_L*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)*(gamma2*(p_L+pi2)/rho2_L)); //frozen
+//                             // if (model==1) c_L=sqrt(1.0/(rho_L*(alpha1_L/(gamma1*(p_L+pi1))+alpha2_L/(gamma2*(p_L+pi2))))); //Wood
+//                             // else if (model==2) c_L=sqrt((Y1_L/(gamma1-1.0)*(gamma1*(p_L+pi1)/rho1_L)+(1.0-Y1_L)/(gamma2-1.0)*(gamma2*(p_L+pi2)/rho2_L))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0))); //Allaire
+//                             cc1_L=sound_speed_square(rho1_L,p_L,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+//                             cc2_L=sound_speed_square(rho2_L,p_L,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+//                             c_L=sqrt((Y1_L/(gamma1-1.0)*cc1_L+(1.0-Y1_L)/(gamma2-1.0)*cc2_L)/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+//                             // c_L=sqrt((Y1_L/(gamma1-1.0)*(((Gamma1+1.0)*p_L-p_ref1)/rho1_L+(p_L-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_L*Gamma1*de_ref1)+(1.0-Y1_L)/(gamma2-1.0)*(((Gamma2+1.0)*p_L-p_ref2)/rho2_L+(p_L-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_L*Gamma2*de_ref2))/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0)));
+//                         }
+//                         else if (sound_speed_type==2){
+//                             double gamma=1.0+1.0/(alpha1_L/(gamma1-1.0)+alpha2_L/(gamma2-1.0));
+//                             double p_ref=(gamma-1.0)/gamma*(alpha1_L*pi1*gamma1/(gamma1-1.0)+alpha2_L*pi2*gamma2/(gamma2-1.0));
+//                             c_L=sqrt(gamma*(p_L+p_ref)/rho_L);
+//                         }
+//                         // c_L=sqrt(alpha1_L*cc1_L+alpha2_L*cc2_L);
+                        
+//                         // right-side cell boundary value
+//                         alpha1_R=W_x_L[0][0][Ixp];
+//                         alpha2_R=1.0-alpha1_R;
+//                         rho1_R=W_x_L[0][1][Ixp];
+//                         rho2_R=W_x_L[0][2][Ixp];
+//                         u_R=W_x_L[0][3][Ixp];
+//                         v_R=W_x_L[0][4][Ixp];
+//                         w_R=W_x_L[0][5][Ixp];
+//                         p_R=W_x_L[0][6][Ixp];
+//                         // rhoE_R=alpha1_R*((p_R+gamma1*pi1)/(gamma1-1.0)+rho1_R*eta1+0.5*rho1_R*q2(u_R,v_R,w_R))
+//                         //     +alpha2_R*((p_R+gamma2*pi2)/(gamma2-1.0)+rho2_R*eta2+0.5*rho2_R*q2(u_R,v_R,w_R));
+//                         prim_to_cons_5eq(&alpha1rho1_R,&alpha2rho2_R,&rhou_R,&rhov_R,&rhow_R,&rhoE_R,
+//                             alpha1_R,rho1_R,rho2_R,u_R,v_R,w_R,p_R);
+//                         rho_R=alpha1_R*rho1_R+alpha2_R*rho2_R;
+//                         Y1_R=alpha1_R*rho1_R/rho_R;
+//                         if (sound_speed_type==1){
+//                             // c_R=sqrt(Y1_R*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)*(gamma2*(p_R+pi2)/rho2_R)); //frozen
+//                             // if (model==1) c_R=sqrt(1.0/(rho_R*(alpha1_R/(gamma1*(p_R+pi1))+alpha2_R/(gamma2*(p_R+pi2))))); //Wood
+//                             // else if (model==2) c_R=sqrt((Y1_R/(gamma1-1.0)*(gamma1*(p_R+pi1)/rho1_R)+(1.0-Y1_R)/(gamma2-1.0)*(gamma2*(p_R+pi2)/rho2_R))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0))); //Allaire
+//                             cc1_R=sound_speed_square(rho1_R,p_R,gamma1,pi1,eta1,cB11,cB21,cE11,cE21,rho01,e01);
+//                             cc2_R=sound_speed_square(rho2_R,p_R,gamma2,pi2,eta2,cB12,cB22,cE12,cE22,rho02,e02);
+//                             c_R=sqrt((Y1_R/(gamma1-1.0)*cc1_R+(1.0-Y1_R)/(gamma2-1.0)*cc2_R)/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+//                             // c_R=sqrt((Y1_R/(gamma1-1.0)*(((Gamma1+1.0)*p_R-p_ref1)/rho1_R+(p_R-p_ref1)/Gamma1*dGamma1+dp_ref1-rho1_R*Gamma1*de_ref1)+(1.0-Y1_R)/(gamma2-1.0)*(((Gamma2+1.0)*p_R-p_ref2)/rho2_R+(p_R-p_ref2)/Gamma2*dGamma2+dp_ref2-rho2_R*Gamma2*de_ref2))/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0)));
+//                         }
+//                         else if (sound_speed_type==2){
+//                             double gamma=1.0+1.0/(alpha1_R/(gamma1-1.0)+alpha2_R/(gamma2-1.0));
+//                             double p_ref=(gamma-1.0)/gamma*(alpha1_R*pi1*gamma1/(gamma1-1.0)+alpha2_R*pi2*gamma2/(gamma2-1.0));
+//                             c_R=sqrt(gamma*(p_R+p_ref)/rho_R);
+//                         }
+//                         // c_R=sqrt(alpha1_R*cc1_R+alpha2_R*cc2_R);
+                        
+//                         if (surface_tension_type>=1) kappa=curv[I_c(i,j,k)];
+//                         else kappa=0.0;
+                        
+//                         // Direct Wave Speed Estimates
+//                         // S_L=min(u_L-c_L,u_R-c_R);
+//                         // S_R=max(u_L+c_L,u_R+c_R);
+//                         S_L=min({0.,u_L-c_L,(u_L+u_R)/2.-(c_L+c_R)/2.});
+//                         S_R=max({0.,u_R+c_R,(u_L+u_R)/2.+(c_L+c_R)/2.});
+//                         if (isnan(S_L) || isnan(S_R)) {
+//                             printf("SLR nan@xc"); getchar();
+//                         }
+                        
+//                         // Maximum Wave Speed
+//                         // if (mwsx<max(fabs(S_L),fabs(S_R))){
+//                         //     mwsx=max(fabs(S_L),fabs(S_R));
+//                         // }
+
+//                         // contact discontinuity speed
+//                         S_star=((p_R-p_L)+(rho_L*u_L*(S_L-u_L)-rho_R*u_R*(S_R-u_R))-sigma_CSF*kappa*(alpha1_R-alpha1_L))
+//                                 /
+//                                 (rho_L*(S_L-u_L)-rho_R*(S_R-u_R));
+
+//                         // HLLC solution
+//                         U_L[0]=alpha1_L;
+//                         U_L[1]=alpha1_L*rho1_L;
+//                         U_L[2]=alpha2_L*rho2_L;
+//                         U_L[3]=rho_L*u_L;
+//                         U_L[4]=rho_L*v_L;
+//                         U_L[5]=rho_L*w_L;
+//                         U_L[6]=rhoE_L;
+//                         S_ratio_L=(S_L-u_L)/(S_L-S_star);
+//                         U_Lstar[0]=alpha1_L;//*S_ratio_L;
+//                         U_Lstar[1]=alpha1_L*rho1_L*S_ratio_L;
+//                         U_Lstar[2]=alpha2_L*rho2_L*S_ratio_L;
+//                         U_Lstar[3]=rho_L*S_star*S_ratio_L;
+//                         U_Lstar[4]=rho_L*v_L*S_ratio_L;
+//                         U_Lstar[5]=rho_L*w_L*S_ratio_L;
+//                         U_Lstar[6]=rho_L*S_ratio_L*(rhoE_L/rho_L+(S_star-u_L)*(S_star+(p_L-sigma_CSF*kappa*alpha1_L)/rho_L/(S_L-u_L)));
+                        
+//                         U_R[0]=alpha1_R;
+//                         U_R[1]=alpha1_R*rho1_R;
+//                         U_R[2]=alpha2_R*rho2_R;
+//                         U_R[3]=rho_R*u_R;
+//                         U_R[4]=rho_R*v_R;
+//                         U_R[5]=rho_R*w_R;
+//                         U_R[6]=rhoE_R;
+//                         S_ratio_R=(S_R-u_R)/(S_R-S_star);
+//                         U_Rstar[0]=alpha1_R;//*S_ratio_R;
+//                         U_Rstar[1]=alpha1_R*rho1_R*S_ratio_R;
+//                         U_Rstar[2]=alpha2_R*rho2_R*S_ratio_R;
+//                         U_Rstar[3]=rho_R*S_star*S_ratio_R;
+//                         U_Rstar[4]=rho_R*v_R*S_ratio_R;
+//                         U_Rstar[5]=rho_R*w_R*S_ratio_R;
+//                         U_Rstar[6]=rho_R*S_ratio_R*(rhoE_R/rho_R+(S_star-u_R)*(S_star+(p_R-sigma_CSF*kappa*alpha1_R)/rho_R/(S_R-u_R)));
+                        
+//                         // calculate fluctuation at cell inside
+//                         Ic = I_c(i,j,k); // index of cell
+//                         for (m=0;m<num_var;m++){
+//                             W1=U_Lstar[m]-U_L[m];
+//                             W2=U_Rstar[m]-U_Lstar[m];
+//                             W3=U_R[m]-U_Rstar[m];
+//                             Adq_x[m][Ic]=(S_L*W1+S_R*W3)+S_star*W2;
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         *MWS_x = mws_x;
+//     }
+    
+    
+// }
 
 void cal_dt(double MWS_x, double MWS_y, double MWS_z){
     
@@ -1631,9 +2011,10 @@ void update(int rk){
     int i, j, k, m, Ic, Ixm, Ixp, Iym, Iyp, Izm, Izp, s, rk_next = (rk + 1) % RK_stage;
     double L, rho, rhou, rhoE, u, p;
     
-    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+    #pragma omp parallel for collapse(3) private(i, j, k, m, Ic, Ixm, Ixp, Iym, Iyp, Izm, Izp, L, s)
+    for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
         for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
                 Ic = I_c(i, j, k); // index of cell
                 Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
                 Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
