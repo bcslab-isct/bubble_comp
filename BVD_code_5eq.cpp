@@ -120,7 +120,6 @@ void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,do
                   double alpha1,double alpha1rho1,double alpha2rho2,double rhou,double rhov,double rhow,double rhoE);
 void initialize_BVD_active();
 void boundary_condition(int);
-void boundary_condition_dim(int,int);
 void reconstruction(int);
 void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R);
 void MUSCL(double*, double*, const vec1d&);
@@ -688,13 +687,13 @@ void initialize_BVD_active(){
     }
 }
 
-void boundary_condition_dim(int d, int rk){
+void boundary_condition(int rk){
     int i, j, k, m, Ic, Ic_ref;
     
     // boundary condition in x-direction
     if (dim >= 1){
-        for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
                 for (i = 0; i < ngx; i++){ // ghost cells in x-direction
                     
                     // negative side from x_range[0]
@@ -747,59 +746,112 @@ void boundary_condition_dim(int d, int rk){
             }
         }
     }
-}
-
-void boundary_condition(int rk){
-    int i, j, k, m, Ic, Ic_ref;
     
-    // boundary condition in x-direction
-    if (dim >= 1){
-        for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                for (i = 0; i < ngx; i++){ // ghost cells in x-direction
+    // boundary condition in y-direction
+    if (dim >= 2){
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = 0; j < ngy; j++){ // each cell in y-direction
+                for (i = ngx; i < ngx + nx; i++){ // ghost cells in x-direction
                     
-                    // negative side from x_range[0]
+                    // negative side from y_range[0]
                     Ic = I_c(i, j, k);
-                    if (boundary_type[0] == 1){ // outflow boundary condition
-                        Ic_ref = I_c(ngx, j, k); // reference cell index
+                    if (boundary_type[2] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(i, ngy, k); // reference cell index
                         for (m = 0; m < num_var; m++){
                             U[rk][m][Ic] = U[rk][m][Ic_ref];
                         }
                     }
-                    else if (boundary_type[0] == 2){ // reflective boundary condition
-                        Ic_ref = I_c(ngx * 2 - 1 - i, j, k); // reference cell index
+                    else if (boundary_type[2] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(i, ngy * 2 - 1 - j, k); // reference cell index
                         for (m = 0; m < num_var; m++){
                             U[rk][m][Ic] = U[rk][m][Ic_ref];
                         }
-                        U[rk][3][Ic] = -U[rk][3][Ic]; // invert velocity component
+                        U[rk][4][Ic] = -U[rk][4][Ic]; // invert velocity component
                     }
-                    else if (boundary_type[0] == 3){ // periodic boundary condition
-                        Ic_ref = I_c(nx + i, j, k); // reference cell index
+                    else if (boundary_type[2] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(i, ny + j, k); // reference cell index
                         for (m = 0; m < num_var; m++){
                             U[rk][m][Ic] = U[rk][m][Ic_ref];
                         }
                     }
-                    else if (boundary_type[0] == 4){ //
+                    else if (boundary_type[2] == 4){ //
                         
                     }
                     
-                    // positive side from x_range[1]
-                    Ic = I_c(NX - 1 - i, j, k);
-                    if (boundary_type[1] == 1){ // outflow boundary condition
-                        Ic_ref = I_c(nx + ngx - 1, j, k); // reference cell index
+                    // positive side from y_range[1]
+                    Ic = I_c(i, NY - 1 - j, k);
+                    if (boundary_type[3] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(i, ny + ngy - 1, k); // reference cell index
                         for (m = 0; m < num_var; m++){
                             U[rk][m][Ic] = U[rk][m][Ic_ref];
                         }
                     }
-                    else if (boundary_type[1] == 2){ // reflective boundary condition
-                        Ic_ref = I_c(nx + i, j, k); // reference cell index
+                    else if (boundary_type[3] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(i, ny + j, k); // reference cell index
                         for (m = 0; m < num_var; m++){
                             U[rk][m][Ic] = U[rk][m][Ic_ref];
                         }
-                        U[rk][3][Ic] = -U[rk][3][Ic]; // invert velocity component
+                        U[rk][4][Ic] = -U[rk][4][Ic]; // invert velocity component
                     }
-                    else if (boundary_type[1] == 3){ // periodic boundary condition
-                        Ic_ref = I_c(ngx * 2 - 1 - i, j, k); // reference cell index
+                    else if (boundary_type[3] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(i, ngy * 2 - 1 - j, k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // boundary condition in z-direction
+    if (dim >= 3){
+        for (k = 0; k < ngz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx; i < ngx + nx; i++){ // ghost cells in x-direction
+                    
+                    // negative side from z_range[0]
+                    Ic = I_c(i, j, k);
+                    if (boundary_type[4] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(i, j, ngz); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[4] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(i, j, ngz * 2 - 1 - k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                        U[rk][5][Ic] = -U[rk][5][Ic]; // invert velocity component
+                    }
+                    else if (boundary_type[4] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(i, j, nz + k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[4] == 4){ //
+                        
+                    }
+                    
+                    // positive side from y_range[1]
+                    Ic = I_c(i, j, NZ - 1 - k);
+                    if (boundary_type[5] == 1){ // outflow boundary condition
+                        Ic_ref = I_c(i, j, nz + ngz - 1); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                    }
+                    else if (boundary_type[5] == 2){ // reflective boundary condition
+                        Ic_ref = I_c(i, j, nz + k); // reference cell index
+                        for (m = 0; m < num_var; m++){
+                            U[rk][m][Ic] = U[rk][m][Ic_ref];
+                        }
+                        U[rk][5][Ic] = -U[rk][5][Ic]; // invert velocity component
+                    }
+                    else if (boundary_type[5] == 3){ // periodic boundary condition
+                        Ic_ref = I_c(i, j, ngz * 2 - 1 - k); // reference cell index
                         for (m = 0; m < num_var; m++){
                             U[rk][m][Ic] = U[rk][m][Ic_ref];
                         }
