@@ -147,7 +147,9 @@ double sum_cons3(double, double, double);
 double pow_int(double x,int n);
 void CSFmodel(int);
 void grad_VOF_cal();
+void grad_VOF_cal_dim(int, int);
 void curv_cal();
+void curv_filter(int);
 void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n);
 
 int main(void){
@@ -182,7 +184,7 @@ int main(void){
             if (dim >= 3) reconstruction_dim(2, rk, W_z_L, W_z_R);
             
             // calculate carvature for surface tension
-            CSFmodel(rk);
+            if (surface_tension_type == 1 || surface_tension_type == 2) CSFmodel(rk);
             
             // calculate numerical flux
             // Riemann_solver_5eq_HLLC(&MWS_x, &MWS_y, &MWS_z);
@@ -400,6 +402,7 @@ void parameter(){
     if (surface_tension_type >= 1){
         sigma_CSF=1.0; // surface tension coefficient
         order_grad_VOF=2; // order of gradient of VOF for surface tension calculation
+        
         ngx_CSF=2; // number of ghost cells for CSF model in x-direction
         if (dim >= 2) ngy_CSF=ngx_CSF; // number of ghost cells for CSF model in y-direction
         else ngy_CSF=0; // number of ghost cells for CSF model in y-direction
@@ -409,7 +412,8 @@ void parameter(){
         NY_CSF=ny+ngy_CSF*2; // number of cell in y-direction including ghost cell for CSF
         NZ_CSF=nz+ngz_CSF*2; // number of cell in z-direction including ghost cell for CSF
         NN_CSF=NX_CSF*NY_CSF*NZ_CSF; // total number of cell including ghost cell for CSF
-        grad_VOF=vec2d(3,vec1d(NN_CSF));
+        
+        grad_VOF=vec2d(3,vec1d(NN_CSF)); // gradient of VOF at cell center in x, y, z-direction
         normal_vec=vec2d(4,vec1d(NN_CSF)); // 4:normal vector existence
         curv=vec1d(NN_CSF);
         coefficient_linear_polynoimal_1stDerivative_CellCenter(order_grad_VOF+1);
@@ -2269,9 +2273,51 @@ double pow_int(double x,int n){
 }
 
 void CSFmodel(int rk){
-    if (surface_tension_type == 1 || surface_tension_type == 2){
-        grad_VOF_cal();
-        curv_cal();
+    if (dim >= 1) grad_VOF_cal_dim(0, rk); // calculate gradient in x-direction
+    if (dim >= 2) grad_VOF_cal_dim(1, rk); // calculate gradient in y-direction
+    if (dim >= 3) grad_VOF_cal_dim(2, rk); // calculate gradient in z-direction
+    curv_cal();
+    
+    if (surface_tension_type == 2) curv_filter(rk); // apply curvature filter
+}
+
+void grad_VOF_cal_dim(int d, int rk){
+    int i, j, k, xi, Ic;
+    int nsc = order_grad_VOF + 1;
+    int smoothing = 1;
+    double pow_sm = 0.1;
+    vec1d ddx = {dx, dy, dz};
+    
+    #pragma omp parallel
+    {
+        vec1d stencil(nsc); // stencil for gradient calculation
+        vec1i idx(3);
+        
+        #pragma omp for collapse(3) private(k, j, i, Ic, xi)
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                    Ic = I_c(i, j, k);
+                    idx = {i, j, k};
+                    idx[d] = idx[d] - (nsc - 1) / 2;
+                    
+                    for (xi = 0; xi < nsc; xi++){
+                        stencil[xi] = U[rk][0][I_c(idx[0], idx[1], idx[2])]; // calculate stencil centered at the cell
+                        idx[d]++; // increment index for next stencil point
+                        // in the case of smoothing
+                        if (smoothing) stencil[xi] = pow(stencil[xi], pow_sm) / (pow(stencil[xi], pow_sm) + pow(1.0 - stencil[xi], pow_sm));
+                    }
+                    
+                    // calculate gradient value at cell center
+                    grad_VOF[d][Ic] = 0.0;
+                    for (xi = 0; xi < (nsc - 1) / 2; xi++){
+                        grad_VOF[d][Ic] += (coef_Pn_D1_CC[xi] * stencil[xi] + coef_Pn_D1_CC[nsc - 1 - xi] * stencil[nsc - 1 - xi]);
+                    }
+                    grad_VOF[d][Ic] += coef_Pn_D1_CC[(nsc - 1) / 2] * stencil[(nsc - 1) / 2];
+                    grad_VOF[d][Ic] /= ddx[d];
+                }
+            }
+        }
     }
 }
 
@@ -2421,227 +2467,164 @@ void grad_VOF_cal(){
 }
 
 void curv_cal(){
-    // int i,j,k,Ic;
-    // double alpha1,eps_int=1.0e-4;
+    int i,j,k,Ic;
+    double alpha1,eps_int=1.0e-4;
     
-    // // Exact curvature in static droplet2
-    // if (0){
-    //     for (i=0;i<nx;i++){
-    //         for (j=0;j<ny;j++){
-    //             for (k=0;k<nz;k++){
-    //                 Ic=I(ng_CSF+i,ng_CSF+j,ng_CSF+k);
-    //                 alpha1=U[k_RK][0][Ic];
-    //                 if (((eps_int<alpha1) && (alpha1<1.0-eps_int)) && 1){
-    //                     curv[Ic]=1.0/max(sqrt(sum_cons3(pow2(xc[i]),pow2(yc[j]),pow2(zc[k]))),eps);
-    //                     // curv[Ic]=1.0;
-    //                 }
-    //                 else {
-    //                     curv[Ic]=0.0;
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+    // Exact curvature in static droplet2
+    if (0){
+        // for (i=0;i<nx;i++){
+        //     for (j=0;j<ny;j++){
+        //         for (k=0;k<nz;k++){
+        //             Ic=I(ng_CSF+i,ng_CSF+j,ng_CSF+k);
+        //             alpha1=U[k_RK][0][Ic];
+        //             if (((eps_int<alpha1) && (alpha1<1.0-eps_int)) && 1){
+        //                 curv[Ic]=1.0/max(sqrt(sum_cons3(pow2(xc[i]),pow2(yc[j]),pow2(zc[k]))),eps);
+        //                 // curv[Ic]=1.0;
+        //             }
+        //             else {
+        //                 curv[Ic]=0.0;
+        //             }
+        //         }
+        //     }
+        // }
+    }
     
-    // // Linear interpolation
-    // if (1){
-    //     #pragma omp parallel
-    //     {
-    //         // int ii,jj;
-    //         // double grad_VOF_x,grad_VOF_y;
-    //         int xi,kc;
-    //         int nsc=3;
-    //         double l,dnxdx,dnydy,dnzdz;
-    //         bool normal_exist;
+    // Linear interpolation
+    if (1){
+        #pragma omp parallel
+        {
+            // int ii,jj;
+            // double grad_VOF_x,grad_VOF_y;
+            int xi,kc;
+            int nsc = 3;
+            double l,dnxdx,dnydy,dnzdz;
+            bool normal_exist;
             
-    //         #pragma omp for private(j,k,Ic)
-    //         for (i=ng;i<ng+nx;i++){ //各セル
-    //             for (j=ng;j<ng+ny;j++){ //各セル
-    //                 for (k=ng;k<ng+nz;k++){ //各セル
-    //                     Ic=I(i,j,k);
-    //                     curv[Ic]=0.0;
+            #pragma omp for collapse(3) private(j,k,Ic)
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                        Ic = I_c(i, j, k);
+                        curv[Ic] = 0.0;
                         
-    //                     //勾配ベクトルの正規化
-    //                     // l=max(sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic]))),1.0e-20);
-    //                     l=sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic])));
-    //                     if (l>1.0e-20 || 0){
-    //                         // grad_VOF[0][Ic]/=l; grad_VOF[1][Ic]/=l; grad_VOF[2][Ic]/=l;
-    //                         normal_vec[0][Ic]=grad_VOF[0][Ic]/l;
-    //                         normal_vec[1][Ic]=grad_VOF[1][Ic]/l;
-    //                         normal_vec[2][Ic]=grad_VOF[2][Ic]/l;
-    //                         normal_vec[3][Ic]=1.0;
-    //                     }
-    //                     else {
-    //                         // grad_VOF[0][Ic]=grad_VOF[1][Ic]=grad_VOF[2][Ic]=0.0;
-    //                         normal_vec[0][Ic]=normal_vec[1][Ic]=normal_vec[2][Ic]=0.0;
-    //                         normal_vec[3][Ic]=0.0;
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //         #pragma omp for private(j,k,Ic)
-    //         for (i=ng;i<ng+nx;i++){ //各セル
-    //             for (j=ng;j<ng+ny;j++){ //各セル
-    //                 for (k=ng;k<ng+nz;k++){ //各セル
-    //                     normal_exist=normal_vec[3][Ic]==1.0;
-    //                     Ic=I(i,j,k);
-    //                     if (dim>=1) normal_exist=normal_exist && (normal_vec[3][I(i+1,j,k)]==1.0) && (normal_vec[3][I(i-1,j,k)]==1.0);
-    //                     if (dim>=2) normal_exist=normal_exist && (normal_vec[3][I(i,j+1,k)]==1.0) && (normal_vec[3][I(i,j-1,k)]==1.0);
-    //                     if (dim>=3) normal_exist=normal_exist && (normal_vec[3][I(i,j,k+1)]==1.0) && (normal_vec[3][I(i,j,k-1)]==1.0);
-    //                     if (normal_exist || 0){
-    //                         // dnxdx=(grad_VOF[0][I(i+1,j,k)]-grad_VOF[0][I(i-1,j,k)])/(2.0*dx);
-    //                         // dnydy=(grad_VOF[1][I(i,j+1,k)]-grad_VOF[1][I(i,j-1,k)])/(2.0*dy);
-    //                         // dnzdz=(grad_VOF[2][I(i,j,k+1)]-grad_VOF[2][I(i,j,k-1)])/(2.0*dz);
-    //                         dnxdx=(normal_vec[0][I(i+1,j,k)]-normal_vec[0][I(i-1,j,k)])/(2.0*dx);
-    //                         dnydy=(normal_vec[1][I(i,j+1,k)]-normal_vec[1][I(i,j-1,k)])/(2.0*dy);
-    //                         dnzdz=(normal_vec[2][I(i,j,k+1)]-normal_vec[2][I(i,j,k-1)])/(2.0*dz);
-    //                     }
-    //                     else {
-    //                         dnxdx=dnydy=dnzdz=0.0;
-    //                     }
+                        //勾配ベクトルの正規化
+                        // l=max(sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic]))),1.0e-20);
+                        l=sqrt(sum_cons3(pow_int(grad_VOF[0][Ic],2),pow_int(grad_VOF[1][Ic],2),pow_int(grad_VOF[2][Ic],2)));
+                        if (l>1.0e-20 || 0){
+                            // grad_VOF[0][Ic]/=l; grad_VOF[1][Ic]/=l; grad_VOF[2][Ic]/=l;
+                            normal_vec[0][Ic]=grad_VOF[0][Ic]/l;
+                            normal_vec[1][Ic]=grad_VOF[1][Ic]/l;
+                            normal_vec[2][Ic]=grad_VOF[2][Ic]/l;
+                            normal_vec[3][Ic]=1.0;
+                        }
+                        else {
+                            // grad_VOF[0][Ic]=grad_VOF[1][Ic]=grad_VOF[2][Ic]=0.0;
+                            normal_vec[0][Ic]=normal_vec[1][Ic]=normal_vec[2][Ic]=0.0;
+                            normal_vec[3][Ic]=0.0;
+                        }
+                    }
+                }
+            }
+            #pragma omp for collapse(3) private(j,k,Ic)
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                        Ic = I_c(i, j, k);
+                        normal_exist=normal_vec[3][Ic]==1.0;
+                        if (dim>=1) normal_exist=normal_exist && (normal_vec[3][I_c(i+1,j,k)]==1.0) && (normal_vec[3][I_c(i-1,j,k)]==1.0);
+                        if (dim>=2) normal_exist=normal_exist && (normal_vec[3][I_c(i,j+1,k)]==1.0) && (normal_vec[3][I_c(i,j-1,k)]==1.0);
+                        if (dim>=3) normal_exist=normal_exist && (normal_vec[3][I_c(i,j,k+1)]==1.0) && (normal_vec[3][I_c(i,j,k-1)]==1.0);
+                        if (normal_exist || 0){
+                            // dnxdx=(grad_VOF[0][I_c(i+1,j,k)]-grad_VOF[0][I_c(i-1,j,k)])/(2.0*dx);
+                            // dnydy=(grad_VOF[1][I_c(i,j+1,k)]-grad_VOF[1][I_c(i,j-1,k)])/(2.0*dy);
+                            // dnzdz=(grad_VOF[2][I_c(i,j,k+1)]-grad_VOF[2][I_c(i,j,k-1)])/(2.0*dz);
+                            dnxdx=(normal_vec[0][I_c(i+1,j,k)]-normal_vec[0][I_c(i-1,j,k)])/(2.0*dx);
+                            dnydy=(normal_vec[1][I_c(i,j+1,k)]-normal_vec[1][I_c(i,j-1,k)])/(2.0*dy);
+                            dnzdz=(normal_vec[2][I_c(i,j,k+1)]-normal_vec[2][I_c(i,j,k-1)])/(2.0*dz);
+                        }
+                        else {
+                            dnxdx=dnydy=dnzdz=0.0;
+                        }
                         
-    //                     //セル中心における曲率を計算
-    //                     curv[Ic]=-sum_cons3(dnxdx,dnydy,dnzdz);
+                        //セル中心における曲率を計算
+                        curv[Ic]=-sum_cons3(dnxdx,dnydy,dnzdz);
                         
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void curv_filter(int rk){
+    int i, j, k, Ic;
+    double alpha1;
     
-    // // Height function method (2D)
-    // if (0){
-    //     #pragma omp parallel
-    //     {
-    //         int ii,jj;
-    //         double grad_VOF_x,grad_VOF_y,H1,H2;
-    //         vec2d stn(7,vec1d(3)); //ステンシル
-    //         vec1d Height(3);
+    // filtering strategy
+    if (1){
+        #pragma omp parallel
+        {
+            // int ii,jj;
             
-    //         #pragma omp for private(j,k,Ic)
-    //         for (i=ng;i<ng+nx;i++){ //各セル
-    //             for (j=ng;j<ng+ny;j++){ //各セル
-    //                 for (k=ng;k<ng+nz;k++){ //各セル
-    //                     Ic=I(i,j,k);
-    //                     curv[Ic]=0.0;
+            #pragma omp for collapse(3) private(j,k,Ic,alpha1)
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                        Ic = I_c(i, j, k);
+                        alpha1=U[rk][0][Ic];
+                        weight_filter[Ic]=pow_int(alpha1*(1.0-alpha1),2);
                         
-    //                     grad_VOF_x=(VOF_x_HLLC[I_x(i+1,j,k)]-VOF_x_HLLC[I_x(i,j,k)])/dx;
-    //                     grad_VOF_y=(VOF_y_HLLC[I_y(i,j+1,k)]-VOF_y_HLLC[I_y(i,j,k)])/dy;
-                        
-    //                     // nx>ny
-    //                     if (fabs(grad_VOF_x)>fabs(grad_VOF_y)){
-    //                         for (ii=-3;ii<=3;ii++){
-    //                             for (jj=-1;jj<=1;jj++){
-    //                                 stn[3+ii][1+jj]=U[k_RK][0][I(i+ii,j+jj,k)];
-    //                             }
-    //                         }
-    //                         for (jj=-1;jj<=1;jj++){
-    //                             Height[1+jj]=0.0;
-    //                             for (ii=-3;ii<=3;ii++){
-    //                                 Height[1+jj]+=stn[3+ii][1+jj]*dx;
-    //                             }
-    //                         }
-    //                         if ((3.0*dx<Height[1]) && (Height[1]<4.0*dx) || 0){
-    //                             H1=(Height[2]-Height[0])/(2.0*dy);
-    //                             H2=(Height[2]-2.0*Height[1]+Height[0])/(dy*dy);
-    //                             curv[Ic]=fabs(H2)/pow(1.0+H1*H1,1.5);
-    //                         }
-    //                         else if (Height[1]<3.0*dx){
-                                
-    //                         }
-    //                     }
-    //                     // ny>nx
-    //                     else {
-    //                         for (jj=-3;jj<=3;jj++){
-    //                             for (ii=-1;ii<=1;ii++){
-    //                                 stn[3+jj][1+ii]=U[k_RK][0][I(i+ii,j+jj,k)];
-    //                             }
-    //                         }
-    //                         for (ii=-1;ii<=1;ii++){
-    //                             Height[1+ii]=0.0;
-    //                             for (jj=-3;jj<=3;jj++){
-    //                                 Height[1+ii]+=stn[3+jj][1+ii]*dy;
-    //                             }
-    //                         }
-    //                         if ((3.0*dy<Height[1]) && (Height[1]<4.0*dy) || 0){
-    //                             H1=(Height[2]-Height[0])/(2.0*dx);
-    //                             H2=(Height[2]-2.0*Height[1]+Height[0])/(dx*dx);
-    //                             curv[Ic]=fabs(H2)/pow(1.0+H1*H1,1.5);
-    //                         }
-    //                     }
-                        
-                        
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-    
-    // // filtering strategy
-    // if (1){
-    //     #pragma omp parallel
-    //     {
-    //         // int ii,jj;
-            
-    //         #pragma omp for private(j,k,Ic,alpha1)
-    //         for (i=ng;i<ng+nx;i++){ //各セル
-    //             for (j=ng;j<ng+ny;j++){ //各セル
-    //                 for (k=ng;k<ng+nz;k++){ //各セル
-    //                     Ic=I(i,j,k);
-    //                     alpha1=U[k_RK][0][Ic];
-    //                     weight_filter[Ic]=pow2(alpha1*(1.0-alpha1));
-                        
-    //                 }
-    //             }
-    //         }
-    //         #pragma omp for private(j,k,Ic)
-    //         for (i=ng+1;i<ng+nx-1;i++){ //各セル
-    //             for (j=ng+1;j<ng+ny-1;j++){ //各セル
-    //                 for (k=ng;k<ng+nz;k++){ //各セル
-    //                     Ic=I(i,j,k);
-    //                     weight_sum_filter[Ic]=weight_filter[Ic]
-    //                         +((weight_filter[I(i-1,j-1,k)]+weight_filter[I(i+1,j+1,k)])
-    //                         + (weight_filter[I(i+1,j-1,k)]+weight_filter[I(i-1,j+1,k)]))
-    //                         +((weight_filter[I(i,j-1,k)]+weight_filter[I(i,j+1,k)])
-    //                         + (weight_filter[I(i-1,j,k)]+weight_filter[I(i+1,j,k)]));
-    //                     weight_sum_filter[Ic]=max(weight_sum_filter[Ic],1.0e-20);
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     int m=0,n_itr=5;
-    //     while (m<n_itr){
-    //         #pragma omp parallel
-    //         {
-    //             #pragma omp for private(j,k,Ic)
-    //             for (i=ng+1;i<ng+nx-1;i++){ //各セル
-    //                 for (j=ng+1;j<ng+ny-1;j++){ //各セル
-    //                     for (k=ng;k<ng+nz;k++){ //各セル
-    //                         Ic=I(i,j,k);
-    //                         curv_sum_filter[Ic]=weight_filter[Ic]*curv[Ic]
-    //                             +((weight_filter[I(i-1,j-1,k)]*curv[I(i-1,j-1,k)]+weight_filter[I(i+1,j+1,k)]*curv[I(i+1,j+1,k)])
-    //                             + (weight_filter[I(i+1,j-1,k)]*curv[I(i+1,j-1,k)]+weight_filter[I(i-1,j+1,k)]*curv[I(i-1,j+1,k)]))
-    //                             +((weight_filter[I(i,j-1,k)]*curv[I(i,j-1,k)]+weight_filter[I(i,j+1,k)]*curv[I(i,j+1,k)])
-    //                             + (weight_filter[I(i-1,j,k)]*curv[I(i-1,j,k)]+weight_filter[I(i+1,j,k)]*curv[I(i+1,j,k)]));
-    //                     }
-    //                 }
-    //             }
-    //             #pragma omp for private(j,k,Ic)
-    //             for (i=ng+1;i<ng+nx-1;i++){ //各セル
-    //                 for (j=ng+1;j<ng+ny-1;j++){ //各セル
-    //                     for (k=ng;k<ng+nz;k++){ //各セル
-    //                         Ic=I(i,j,k);
-    //                         curv[Ic]=curv_sum_filter[Ic]/weight_sum_filter[Ic];
-    //                         if (isnan(curv[Ic])){
-    //                             printf("stop\n"); getchar();
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //         m++;
-    //     }
-    // }
+                    }
+                }
+            }
+            #pragma omp for collapse(3) private(j,k,Ic)
+            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+                for (j = ngy + 1; j < ngy + ny - 1; j++){ // each cell in y-direction
+                    for (i = ngx + 1; i < ngx + nx - 1; i++){ // each cell in x-direction
+                        Ic = I_c(i, j, k);
+                        weight_sum_filter[Ic]=weight_filter[Ic]
+                            +((weight_filter[I_c(i-1,j-1,k)]+weight_filter[I_c(i+1,j+1,k)])
+                            + (weight_filter[I_c(i+1,j-1,k)]+weight_filter[I_c(i-1,j+1,k)]))
+                            +((weight_filter[I_c(i,j-1,k)]+weight_filter[I_c(i,j+1,k)])
+                            + (weight_filter[I_c(i-1,j,k)]+weight_filter[I_c(i+1,j,k)]));
+                        weight_sum_filter[Ic]=max(weight_sum_filter[Ic],1.0e-20);
+                    }
+                }
+            }
+        }
+        int m=0,n_itr=5;
+        while (m<n_itr){
+            #pragma omp parallel
+            {
+                #pragma omp for collapse(3) private(j,k,Ic)
+                for (k=ngz;k<ngz+nz;k++){ //各セル
+                    for (j=ngy+1;j<ngy+ny-1;j++){ //各セル
+                        for (i=ngx+1;i<ngx+nx-1;i++){ //各セル
+                            Ic=I_c(i,j,k);
+                            curv_sum_filter[Ic]=weight_filter[Ic]*curv[Ic]
+                                +((weight_filter[I_c(i-1,j-1,k)]*curv[I_c(i-1,j-1,k)]+weight_filter[I_c(i+1,j+1,k)]*curv[I_c(i+1,j+1,k)])
+                                + (weight_filter[I_c(i+1,j-1,k)]*curv[I_c(i+1,j-1,k)]+weight_filter[I_c(i-1,j+1,k)]*curv[I_c(i-1,j+1,k)]))
+                                +((weight_filter[I_c(i,j-1,k)]*curv[I_c(i,j-1,k)]+weight_filter[I_c(i,j+1,k)]*curv[I_c(i,j+1,k)])
+                                + (weight_filter[I_c(i-1,j,k)]*curv[I_c(i-1,j,k)]+weight_filter[I_c(i+1,j,k)]*curv[I_c(i+1,j,k)]));
+                        }
+                    }
+                }
+                #pragma omp for collapse(3) private(j,k,Ic)
+                for (k=ngz;k<ngz+nz;k++){ //各セル
+                    for (j=ngy+1;j<ngy+ny-1;j++){ //各セル
+                        for (i=ngx+1;i<ngx+nx-1;i++){ //各セル
+                            Ic=I_c(i,j,k);
+                            curv[Ic]=curv_sum_filter[Ic]/weight_sum_filter[Ic];
+                            if (isnan(curv[Ic])){
+                                printf("stop\n"); getchar();
+                            }
+                        }
+                    }
+                }
+            }
+            m++;
+        }
+    }
 }
 
 void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n){
