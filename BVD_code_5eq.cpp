@@ -158,7 +158,7 @@ int main(void){
     parameter();
     
     // int num_threads = omp_get_max_threads(); // get maximum number of threads
-    int num_threads = 2; // set number of threads
+    int num_threads = 4; // set number of threads
     omp_set_num_threads(num_threads); // set number of threads for OpenMP
     
     initial_condition();
@@ -870,9 +870,6 @@ void boundary_condition(int rk){
 
 void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
     int i, j, k, m, xi, Ip, Im;
-    double q_L, q_R;
-    vec2d stencil(num_var, vec1d(ns));
-    vec1i idx(3);
     
     vec1i loop_begin = loop_begin_base;
     vec1i loop_size = loop_size_base;
@@ -880,56 +877,64 @@ void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
     loop_size[d]  += (1 + BVD_s) * 2;
     
     // reconstruction in d-direction
-    for (k = loop_begin[2]; k < loop_begin[2] + loop_size[2]; k++){ // each cell in z-direction
-        for (j = loop_begin[1]; j < loop_begin[1] + loop_size[1]; j++){ // each cell in y-direction
-            for (i = loop_begin[0]; i < loop_begin[0] + loop_size[0]; i++){ // each cell in x-direction
-                
-                // put conservative variables in stencil
-                for (m = 0; m < num_var; m++){ // each variables
-                    idx = {i, j, k};
-                    idx[d] = idx[d] - (ns - 1) / 2;
+    #pragma omp parallel
+    {
+        double q_L, q_R;
+        vec2d stencil(num_var, vec1d(ns));
+        vec1i idx(3);
+        
+        #pragma omp for collapse(3) private(i, j, k, m, xi, Ip, Im)
+        for (k = loop_begin[2]; k < loop_begin[2] + loop_size[2]; k++){ // each cell in z-direction
+            for (j = loop_begin[1]; j < loop_begin[1] + loop_size[1]; j++){ // each cell in y-direction
+                for (i = loop_begin[0]; i < loop_begin[0] + loop_size[0]; i++){ // each cell in x-direction
+                    
+                    // put conservative variables in stencil
+                    for (m = 0; m < num_var; m++){ // each variables
+                        idx = {i, j, k};
+                        idx[d] = idx[d] - (ns - 1) / 2;
+                        for (xi = 0; xi < ns; xi++){
+                            // stencil[m][xi] = U[rk][m][I_c(i - (ns - 1) / 2 + xi, j, k)]; // stencil for reconstruction
+                            stencil[m][xi] = U[rk][m][I_c(idx[0], idx[1], idx[2])];
+                            idx[d]++;
+                        }
+                    }
+                    
+                    // calculate primitive variables from conservative variables
                     for (xi = 0; xi < ns; xi++){
-                        // stencil[m][xi] = U[rk][m][I_c(i - (ns - 1) / 2 + xi, j, k)]; // stencil for reconstruction
-                        stencil[m][xi] = U[rk][m][I_c(idx[0], idx[1], idx[2])];
-                        idx[d]++;
+                        cons_to_prim_5eq(&stencil[1][xi], &stencil[2][xi], &stencil[3][xi], &stencil[4][xi], &stencil[5][xi], &stencil[6][xi],
+                            stencil[0][xi], stencil[1][xi], stencil[2][xi], stencil[3][xi], stencil[4][xi], stencil[5][xi], stencil[6][xi]);
+                        stencil[1][xi] = stencil[0][xi] * stencil[1][xi]; // alpha1rho1=alpha1*rho1
+                        stencil[2][xi] = (1.0 - stencil[0][xi]) * stencil[2][xi]; // alpha2rho2=(1-alpha1)*rho2
                     }
-                }
-                
-                // calculate primitive variables from conservative variables
-                for (xi = 0; xi < ns; xi++){
-                    cons_to_prim_5eq(&stencil[1][xi], &stencil[2][xi], &stencil[3][xi], &stencil[4][xi], &stencil[5][xi], &stencil[6][xi],
-                        stencil[0][xi], stencil[1][xi], stencil[2][xi], stencil[3][xi], stencil[4][xi], stencil[5][xi], stencil[6][xi]);
-                    stencil[1][xi] = stencil[0][xi] * stencil[1][xi]; // alpha1rho1=alpha1*rho1
-                    stencil[2][xi] = (1.0 - stencil[0][xi]) * stencil[2][xi]; // alpha2rho2=(1-alpha1)*rho2
-                }
-                    
-                // calculate cell boundary values
-                // q_L: left-side cell boundary value at x_{i+1/2}
-                // q_R: right-side cell boundary value at x_{i-1/2}
-                // Ip = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
-                // Im = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
-                get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
-                for (m = 0; m < num_var; m++){
-                    
-                    if (scheme_type == 1){
-                        MUSCL(&q_L, &q_R, stencil[m]);
-                        W_L[0][m][Ip] = q_L;
-                        W_R[0][m][Im] = q_R;
+                        
+                    // calculate cell boundary values
+                    // q_L: left-side cell boundary value at x_{i+1/2}
+                    // q_R: right-side cell boundary value at x_{i-1/2}
+                    // Ip = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                    // Im = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                    get_cb_indices_from_cc(d, i, j, k, Im, Ip); // get cell boundary indices
+                    for (m = 0; m < num_var; m++){
+                        
+                        if (scheme_type == 1){
+                            MUSCL(&q_L, &q_R, stencil[m]);
+                            W_L[0][m][Ip] = q_L;
+                            W_R[0][m][Im] = q_R;
+                        }
+                        else if (scheme_type == 2){
+                            THINC(&q_L, &q_R, stencil[m]);
+                            W_L[0][m][Ip] = q_L;
+                            W_R[0][m][Im] = q_R;
+                        }
+                        else if (scheme_type == 3){
+                            MUSCL(&q_L, &q_R, stencil[m]);
+                            W_L[0][m][Ip] = q_L;
+                            W_R[0][m][Im] = q_R;
+                            THINC(&q_L, &q_R, stencil[m]);
+                            W_L[1][m][Ip] = q_L;
+                            W_R[1][m][Im] = q_R;
+                        }
+                        
                     }
-                    else if (scheme_type == 2){
-                        THINC(&q_L, &q_R, stencil[m]);
-                        W_L[0][m][Ip] = q_L;
-                        W_R[0][m][Im] = q_R;
-                    }
-                    else if (scheme_type == 3){
-                        MUSCL(&q_L, &q_R, stencil[m]);
-                        W_L[0][m][Ip] = q_L;
-                        W_R[0][m][Im] = q_R;
-                        THINC(&q_L, &q_R, stencil[m]);
-                        W_L[1][m][Ip] = q_L;
-                        W_R[1][m][Im] = q_R;
-                    }
-                    
                 }
             }
         }
@@ -944,6 +949,7 @@ void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
     loop_size = loop_size_base;
     loop_begin[d] -= 1;
     loop_size[d]  += 2;
+    #pragma omp parallel for collapse(3) private(i, j, k, m, Ip, Im)
     for (k = loop_begin[2]; k < loop_begin[2] + loop_size[2]; k++){ // each cell in z-direction
         for (j = loop_begin[1]; j < loop_begin[1] + loop_size[1]; j++){ // each cell in y-direction
             for (i = loop_begin[0]; i < loop_begin[0] + loop_size[0]; i++){ // each cell in x-direction
@@ -964,88 +970,88 @@ void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R){
     
 }
 
-void reconstruction(int rk){
-    int i, j, k, m, xi, Ixp, Ixm;
-    double q_L, q_R;
-    vec2d stencil(num_var, vec1d(ns));
+// void reconstruction(int rk){
+//     int i, j, k, m, xi, Ixp, Ixm;
+//     double q_L, q_R;
+//     vec2d stencil(num_var, vec1d(ns));
     
-    // reconstruction in x-direction
-    if (dim >= 1){
-        for (i = ngx - 1 - BVD_s; i < ngx + nx + 1 + BVD_s; i++){ // each cell in x-direction
-            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+//     // reconstruction in x-direction
+//     if (dim >= 1){
+//         for (i = ngx - 1 - BVD_s; i < ngx + nx + 1 + BVD_s; i++){ // each cell in x-direction
+//             for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+//                 for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
                     
-                    // put conservative variables in stencil
-                    for (m = 0; m < num_var; m++){ // each variables
-                        for (xi = 0; xi < ns; xi++){
-                            stencil[m][xi] = U[rk][m][I_c(i - (ns - 1) / 2 + xi, j, k)]; // stencil for reconstruction
-                        }
-                    }
+//                     // put conservative variables in stencil
+//                     for (m = 0; m < num_var; m++){ // each variables
+//                         for (xi = 0; xi < ns; xi++){
+//                             stencil[m][xi] = U[rk][m][I_c(i - (ns - 1) / 2 + xi, j, k)]; // stencil for reconstruction
+//                         }
+//                     }
                     
-                    // calculate primitive variables from conservative variables
-                    for (xi = 0; xi < ns; xi++){
-                        cons_to_prim_5eq(&stencil[1][xi], &stencil[2][xi], &stencil[3][xi], &stencil[4][xi], &stencil[5][xi], &stencil[6][xi],
-                            stencil[0][xi], stencil[1][xi], stencil[2][xi], stencil[3][xi], stencil[4][xi], stencil[5][xi], stencil[6][xi]);
-                            stencil[1][xi] = stencil[0][xi] * stencil[1][xi];
-                            stencil[2][xi] = (1.0 - stencil[0][xi]) * stencil[2][xi];
-                    }
+//                     // calculate primitive variables from conservative variables
+//                     for (xi = 0; xi < ns; xi++){
+//                         cons_to_prim_5eq(&stencil[1][xi], &stencil[2][xi], &stencil[3][xi], &stencil[4][xi], &stencil[5][xi], &stencil[6][xi],
+//                             stencil[0][xi], stencil[1][xi], stencil[2][xi], stencil[3][xi], stencil[4][xi], stencil[5][xi], stencil[6][xi]);
+//                             stencil[1][xi] = stencil[0][xi] * stencil[1][xi];
+//                             stencil[2][xi] = (1.0 - stencil[0][xi]) * stencil[2][xi];
+//                     }
                         
-                    // calculate cell boundary values
-                    // q_L: left-side cell boundary value at x_{i+1/2}
-                    // q_R: right-side cell boundary value at x_{i-1/2}
-                    Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
-                    Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
-                    for (m = 0; m < num_var; m++){
+//                     // calculate cell boundary values
+//                     // q_L: left-side cell boundary value at x_{i+1/2}
+//                     // q_R: right-side cell boundary value at x_{i-1/2}
+//                     Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+//                     Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+//                     for (m = 0; m < num_var; m++){
                         
-                        if (scheme_type == 1){
-                            MUSCL(&q_L, &q_R, stencil[m]);
-                            W_x_L[0][m][Ixp] = q_L;
-                            W_x_R[0][m][Ixm] = q_R;
-                        }
-                        else if (scheme_type == 2){
-                            THINC(&q_L, &q_R, stencil[m]);
-                            W_x_L[0][m][Ixp] = q_L;
-                            W_x_R[0][m][Ixm] = q_R;
-                        }
-                        else if (scheme_type == 3){
-                            MUSCL(&q_L, &q_R, stencil[m]);
-                            W_x_L[0][m][Ixp] = q_L;
-                            W_x_R[0][m][Ixm] = q_R;
-                            THINC(&q_L, &q_R, stencil[m]);
-                            W_x_L[1][m][Ixp] = q_L;
-                            W_x_R[1][m][Ixm] = q_R;
-                        }
+//                         if (scheme_type == 1){
+//                             MUSCL(&q_L, &q_R, stencil[m]);
+//                             W_x_L[0][m][Ixp] = q_L;
+//                             W_x_R[0][m][Ixm] = q_R;
+//                         }
+//                         else if (scheme_type == 2){
+//                             THINC(&q_L, &q_R, stencil[m]);
+//                             W_x_L[0][m][Ixp] = q_L;
+//                             W_x_R[0][m][Ixm] = q_R;
+//                         }
+//                         else if (scheme_type == 3){
+//                             MUSCL(&q_L, &q_R, stencil[m]);
+//                             W_x_L[0][m][Ixp] = q_L;
+//                             W_x_R[0][m][Ixm] = q_R;
+//                             THINC(&q_L, &q_R, stencil[m]);
+//                             W_x_L[1][m][Ixp] = q_L;
+//                             W_x_R[1][m][Ixm] = q_R;
+//                         }
                         
-                    }
-                }
-            }
-        }
+//                     }
+//                 }
+//             }
+//         }
         
-        if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
-            // BVD_selection_x(rk);
-            BVD_selection_dim(0, rk, W_x_L, W_x_R, BVD_active[0]);
-        }
+//         if (BVD > 1){ // MUSCL or THINC scheme is selected at each cell following BVD selection algorithm
+//             // BVD_selection_x(rk);
+//             BVD_selection_dim(0, rk, W_x_L, W_x_R, BVD_active[0]);
+//         }
         
         
-        for (i = ngx - 1; i < ngx + nx + 1; i++){ // each cell in x-direction
-            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                    Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
-                    Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+//         for (i = ngx - 1; i < ngx + nx + 1; i++){ // each cell in x-direction
+//             for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+//                 for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+//                     Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+//                     Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
                     
-                    W_x_L[0][1][Ixp]=W_x_L[0][1][Ixp]/W_x_L[0][0][Ixp]; //rho1=alpha1rho1/alpha1
-                    W_x_L[0][2][Ixp]=W_x_L[0][2][Ixp]/(1.0-W_x_L[0][0][Ixp]); //rho2=alpha2rho2/alpha2
+//                     W_x_L[0][1][Ixp]=W_x_L[0][1][Ixp]/W_x_L[0][0][Ixp]; //rho1=alpha1rho1/alpha1
+//                     W_x_L[0][2][Ixp]=W_x_L[0][2][Ixp]/(1.0-W_x_L[0][0][Ixp]); //rho2=alpha2rho2/alpha2
                     
-                    W_x_R[0][1][Ixm]=W_x_R[0][1][Ixm]/W_x_R[0][0][Ixm]; //rho1=alpha1rho1/alpha1
-                    W_x_R[0][2][Ixm]=W_x_R[0][2][Ixm]/(1.0-W_x_R[0][0][Ixm]); //rho2=alpha2rho2/alpha2
-                }
-            }
-        }
+//                     W_x_R[0][1][Ixm]=W_x_R[0][1][Ixm]/W_x_R[0][0][Ixm]; //rho1=alpha1rho1/alpha1
+//                     W_x_R[0][2][Ixm]=W_x_R[0][2][Ixm]/(1.0-W_x_R[0][0][Ixm]); //rho2=alpha2rho2/alpha2
+//                 }
+//             }
+//         }
         
-        // bvc_Euler_x(0); // if the reconstructed values violate positivity, the reconstruction function is degraded to 1st-order method to keep positivity.
-    }
+//         // bvc_Euler_x(0); // if the reconstructed values violate positivity, the reconstruction function is degraded to 1st-order method to keep positivity.
+//     }
     
-}
+// }
 
 void MUSCL(double *qL, double *qR, const vec1d& q){
     
