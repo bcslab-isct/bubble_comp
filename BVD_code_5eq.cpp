@@ -152,7 +152,7 @@ void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n);
 
 int main(void){
     
-    int i, m, rk, per;
+    int i, d, m, rk, per;
     double percent, MWS_x, MWS_y, MWS_z;
     
     parameter();
@@ -177,14 +177,18 @@ int main(void){
             
             // interpolate cell boundary values
             // reconstruction(rk);
-            reconstruction_dim(0, rk, W_x_L, W_x_R);
+            if (dim >= 1) reconstruction_dim(0, rk, W_x_L, W_x_R);
+            if (dim >= 2) reconstruction_dim(1, rk, W_y_L, W_y_R);
+            if (dim >= 3) reconstruction_dim(2, rk, W_z_L, W_z_R);
             
             // calculate carvature for surface tension
             CSFmodel(rk);
             
             // calculate numerical flux
             // Riemann_solver_5eq_HLLC(&MWS_x, &MWS_y, &MWS_z);
-            Riemann_solver_5eq_HLLC_dim(0, &MWS_x, W_x_L, W_x_R, Amdq_x, Apdq_x, Adq_x);
+            if (dim >= 1) Riemann_solver_5eq_HLLC_dim(0, &MWS_x, W_x_L, W_x_R, Amdq_x, Apdq_x, Adq_x);
+            if (dim >= 2) Riemann_solver_5eq_HLLC_dim(1, &MWS_y, W_y_L, W_y_R, Amdq_y, Apdq_y, Adq_y);
+            if (dim >= 3) Riemann_solver_5eq_HLLC_dim(2, &MWS_z, W_z_L, W_z_R, Amdq_z, Apdq_z, Adq_z);
             
             // update numerical solution
             cal_dt(MWS_x, MWS_y, MWS_z);
@@ -2202,11 +2206,11 @@ inline int I_c(int i, int j, int k){
 }
 
 inline int I_x(int i, int j, int k){
-    return NBX * NY * k + NBX * j + i;
+    return (NX + 1) * NY * k + (NX + 1) * j + i;
 }
 
 inline int I_y(int i, int j, int k){
-    return NX * NBY * k + NX * j + i;
+    return NX * (NY + 1) * k + NX * j + i;
 }
 
 inline int I_z(int i, int j, int k){
