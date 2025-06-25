@@ -160,7 +160,7 @@ int main(void){
     parameter();
     
     // int num_threads = omp_get_max_threads(); // get maximum number of threads
-    int num_threads = 4; // set number of threads
+    int num_threads = 1; // set number of threads
     omp_set_num_threads(num_threads); // set number of threads for OpenMP
     
     initial_condition();
@@ -2073,11 +2073,12 @@ void update(int rk){
 
 void output_result(){
     int i, j, k, m, Ic, d, rk;
-    double alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE, rho1, rho2, u, v, w, p, rho;
+    double alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE, rho1, rho2, u, v, w, p, rho, Y1;
     int BVD_func;
     
     std::ofstream file_result("./result.csv");
-        
+    
+    file_result << "x,y,z,alpha1,rho1,rho2,u,v,w,p,rho,Y1,BVD_func\n";
     for (i = ngx; i < ngx + nx; i++){
         for (j = ngy; j < ngy + ny; j++){
             for (k = ngz; k < ngz + nz; k++){
@@ -2095,17 +2096,21 @@ void output_result(){
                 cons_to_prim_5eq(&rho1,&rho2,&u,&v,&w,&p,
                                 alpha1,alpha1rho1,alpha2rho2,rhou,rhov,rhow,rhoE);
                 
+                rho = alpha1 * rho1 + (1.0 - alpha1) * rho2;
+                Y1 = alpha1 * rho1 / rho;
+                
                 file_result << std::setprecision(15);
-                file_result << xc[i] << " " << yc[j] << " " << zc[k] << " ";
+                file_result << xc[i] << "," << yc[j] << "," << zc[k] << ",";
                 file_result
-                    << alpha1 << " "
-                    << rho1 << " "
-                    << rho2 << " "
-                    << u << " "
-                    << v << " "
-                    << w << " "
-                    << p << " "
-                    << rho << " ";
+                    << alpha1 << ","
+                    << rho1 << ","
+                    << rho2 << ","
+                    << u << ","
+                    << v << ","
+                    << w << ","
+                    << p << ","
+                    << rho << ","
+                    << Y1 << ",";
                 BVD_func = 0;
                 for (d = 0; d < dim; d++){
                     for (rk = 0; rk < RK_stage; rk++){
@@ -2114,8 +2119,8 @@ void output_result(){
                         }
                     }
                 }
-                file_result << BVD_func << " ";
-                file_result << "\n";
+                file_result << BVD_func << "\n";
+                // file_result << "\n";
             }
         }
     }

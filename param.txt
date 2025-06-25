@@ -1,0 +1,19 @@
+# Spatial dimension: 1=1D, 2=2D, 3=3D
+dimension=2
+
+# Problem type:
+#   if dimension==1 → 1: shock tube
+#   if dimension==2 or 3 → 1: static droplet
+problem_type=1
+
+# Numerical scheme:
+#   1: MUSCL
+#   2: THINC
+#   3: MUSCL-THINC-BVD
+scheme=3
+
+# Surface tension model:
+#   0: none
+#   1: linear interpolation
+#   2: linear + filtering
+surface_tension=2
