@@ -17,3 +17,6 @@ scheme = 3
 #   1: linear interpolation
 #   2: linear + filtering
 surface_tension = 2
+
+# Number of threads for OpenMP
+num_threads = 30
