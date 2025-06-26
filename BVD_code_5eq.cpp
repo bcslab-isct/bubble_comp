@@ -15,6 +15,7 @@
 #include<valarray>
 #include<iomanip>
 #include<omp.h>
+#include <unordered_map>
 
 #define eps 1.0e-15
 #define GNUPLOT "gnuplot -persist"
@@ -98,6 +99,7 @@ vec1d weight_filter, weight_sum_filter, curv_sum_filter;
 vec1d coef_Pn_D1_CC;
 
 void parameter();
+std::unordered_map<string, string> read_params(const std::string&);
 void EOS_param();
 void EOS_param_ref
 (
@@ -160,7 +162,7 @@ int main(void){
     parameter();
     
     // int num_threads = omp_get_max_threads(); // get maximum number of threads
-    int num_threads = 1; // set number of threads
+    int num_threads = 30; // set number of threads
     omp_set_num_threads(num_threads); // set number of threads for OpenMP
     
     initial_condition();
@@ -224,45 +226,75 @@ void parameter(){
     int i, j, k;
     
     // set benchmark test
-    cout << "Press number of dimension." << endl;
-    cout << "1: 1D, 2: 2D, 3: 3D" << endl;
-    cin >> dim;
-    if (dim < 1 || dim > 3){
-        cout << "Invalid dimension." << endl;
-        exit(0);
-    }
+    // cout << "Press number of dimension." << endl;
+    // cout << "1: 1D, 2: 2D, 3: 3D" << endl;
+    // cin >> dim;
+    // if (dim < 1 || dim > 3){
+    //     cout << "Invalid dimension." << endl;
+    //     exit(0);
+    // }
     
-    cout << "Press number of benchmark test." << endl;
-    if (dim == 1) {
-        cout << "1: 1D shock-tube problem" << endl;
-    }
-    else if (dim == 2) {
-        cout << "1: 2D static droplet problem" << endl;
-    }
-    else if (dim == 3) {
-        cout << "1: 3D static droplet problem" << endl;
-    }
-    cin >> problem_type;
+    // cout << "Press number of benchmark test." << endl;
+    // if (dim == 1) {
+    //     cout << "1: 1D shock-tube problem" << endl;
+    // }
+    // else if (dim == 2) {
+    //     cout << "1: 2D static droplet problem" << endl;
+    // }
+    // else if (dim == 3) {
+    //     cout << "1: 3D static droplet problem" << endl;
+    // }
+    // cin >> problem_type;
     
-    // set numerical scheme
-    cout << "Press number of scheme." << endl;
-    cout << "1: MUSCL, 2: THINC, 3: MUSCL-THINC-BVD" << endl;
-    cin >> scheme_type;
+    // // set numerical scheme
+    // cout << "Press number of scheme." << endl;
+    // cout << "1: MUSCL, 2: THINC, 3: MUSCL-THINC-BVD" << endl;
+    // cin >> scheme_type;
     
+    // if      (scheme_type == 1) scheme_name = "MUSCL";
+    // else if (scheme_type == 2) scheme_name = "THINC";
+    // else if (scheme_type == 3) scheme_name = "MUSCL-THINC-BVD";
+    // else {
+    //     cout << "Not implemented." << endl;
+    //     exit(0);
+    // }
+    
+    // cout << "Press number of scheme for surface tension." << endl;
+    // cout << "0: without surface tension, 1: linear polynomial, 2: linear + filtering" << endl;
+    // cin >> surface_tension_type;
+    
+    auto params = read_params("param.txt");
+    
+    // dim         = std::stoi(params["dimension"]);
+    // problem_type      = std::stoi(params["problem_type"]);
+    // scheme_type            = std::stoi(params["scheme"]);
+    // surface_tension_type   = std::stoi(params["surface_tension"]);
+    dim         = std::stoi(params.at("dimension"));
+    problem_type      = std::stoi(params.at("problem_type"));
+    scheme_type            = std::stoi(params.at("scheme"));
+    surface_tension_type   = std::stoi(params.at("surface_tension"));
+    
+    string scheme_name;
     if      (scheme_type == 1) scheme_name = "MUSCL";
     else if (scheme_type == 2) scheme_name = "THINC";
     else if (scheme_type == 3) scheme_name = "MUSCL-THINC-BVD";
     else {
-        cout << "Not implemented." << endl;
+        std::cerr << "Invalid scheme value." << std::endl;
         exit(0);
     }
-    
-    cout << "Press number of scheme for surface tension." << endl;
-    cout << "0: without surface tension, 1: linear polynomial, 2: linear + filtering" << endl;
-    cin >> surface_tension_type;
-    
     if (scheme_name == "MUSCL" || scheme_name == "THINC") BVD = 1; // number of cacndidate reconstruction schemes
     else if (scheme_name == "MUSCL-THINC-BVD") BVD = 2;
+
+    if (dim < 1 || dim > 3) {
+        std::cerr << "Invalid dimension: must be 1, 2, or 3." << std::endl;
+        exit(0);
+    }
+
+    // Print the loaded settings
+    std::cout << "Dimension:        " << dim << "\n";
+    std::cout << "Problem type:     " << problem_type << "\n";
+    std::cout << "Scheme:           " << scheme_name << "\n";
+    std::cout << "Surface tension:  " << surface_tension_type << "\n";
     
     num_var = 7; // number of variables in 5eq model (alpha1, rho1, rho2, rhou, rhov, rhow, rhoE)
     
@@ -432,6 +464,36 @@ void parameter(){
     // for THINC scheme
     beta = 1.6; // gradient parameter
     T1_THINC = tanh(beta / 2.0); // T1 should be precalculated for reducing computational cost
+}
+
+// Read parameters from file (ignores comment lines starting with #)
+std::unordered_map<std::string, std::string> read_params(const std::string& filename) {
+    std::unordered_map<std::string, std::string> params;
+    std::ifstream infile(filename);
+    std::string line;
+
+    while (std::getline(infile, line)) {
+        // Remove leading/trailing whitespace
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+
+        // Skip empty or comment lines
+        if (line.empty() || line[0] == '#') continue;
+
+        std::istringstream iss(line);
+        std::string key, value;
+        if (std::getline(iss, key, '=') && std::getline(iss, value)) {
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            value.erase(0, value.find_first_not_of(" \t"));
+            value.erase(value.find_last_not_of(" \t") + 1);
+            // params[key] = value;
+            if (!key.empty() && !value.empty()) {
+                params[key] = value;
+            }
+        }
+    }
+    return params;
 }
 
 void EOS_param(){
