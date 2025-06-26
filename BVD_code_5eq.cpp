@@ -111,17 +111,12 @@ void cons_to_prim_5eq(double *rho1,double *rho2,double *u,double *v,double *w,do
                   double alpha1,double alpha1rho1,double alpha2rho2,double rhou,double rhov,double rhow,double rhoE);
 void initialize_BVD_active();
 void boundary_condition(int);
-void reconstruction(int);
 void reconstruction_dim(int d, int rk, vec3d& W_L, vec3d& W_R);
 void MUSCL(double*, double*, const vec1d&);
 double Phi_MUSCL(double);
 void THINC(double*, double*, const vec1d&);
 void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R, vec3i&);
-void BVD_selection_x(int);
-void BVD_selection_y(int);
-void BVD_selection_z(int);
 // void bvc_Euler_x(int);
-void Riemann_solver_5eq_HLLC(double*,double*,double*);
 void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const vec3d& W_R, vec2d& Amdq, vec2d& Apdq, vec2d& Adq);
 void cal_dt(double,double,double);
 void update(int);
@@ -136,7 +131,6 @@ double q2(double,double,double);
 double sum_cons3(double, double, double);
 double pow_int(double x,int n);
 void CSFmodel(int);
-void grad_VOF_cal();
 void grad_VOF_cal_dim(int, int);
 void curv_cal();
 void curv_filter(int);
@@ -210,10 +204,6 @@ void parameter(){
     
     auto params = read_params("param.txt");
     
-    // dim         = std::stoi(params["dimension"]);
-    // problem_type      = std::stoi(params["problem_type"]);
-    // scheme_type            = std::stoi(params["scheme"]);
-    // surface_tension_type   = std::stoi(params["surface_tension"]);
     dim                  = std::stoi(params.at("dimension"));
     problem_type         = std::stoi(params.at("problem_type"));
     scheme_type          = std::stoi(params.at("scheme"));
@@ -384,7 +374,7 @@ void parameter(){
         sigma_CSF=1.0; // surface tension coefficient
         order_grad_VOF=2; // order of gradient of VOF for surface tension calculation
         
-        ngx_CSF=2; // number of ghost cells for CSF model in x-direction
+        ngx_CSF=max(order_grad_VOF/2,ngx); // number of ghost cells for CSF model in x-direction
         if (dim >= 2) ngy_CSF=ngx_CSF; // number of ghost cells for CSF model in y-direction
         else ngy_CSF=0; // number of ghost cells for CSF model in y-direction
         if (dim >= 3) ngz_CSF=ngx_CSF; // number of ghost cells for CSF model in z-direction
@@ -1081,7 +1071,7 @@ void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const v
         double kappa;
         
         // calculate fluctuation at cell boundary
-        #pragma omp for collapse(3) private(j,i,m) reduction(max:mws_d)
+        #pragma omp for collapse(3) private(k,j,i,m) reduction(max:mws_d)
         for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
             for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
                 for (i=ngx;i<ngx+nx+1;i++){ // each cell boundary in x-direction
@@ -1280,7 +1270,7 @@ void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const v
         }
         
         // calculate fluctuation at cell inside
-        #pragma omp for collapse(3) private(j,i,m)
+        #pragma omp for collapse(3) private(k,j,i,m)
         for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
             for (j=ngy;j<ngy+ny;j++){ // each cell in y-direction
                 for (i=ngx;i<ngx+nx;i++){ // each cell in x-direction
@@ -1689,66 +1679,58 @@ void curv_cal(){
     }
     
     // Linear interpolation
-    if (1){
-        #pragma omp parallel
-        {
-            // int ii,jj;
-            // double grad_VOF_x,grad_VOF_y;
-            int xi,kc;
-            int nsc = 3;
-            double l,dnxdx,dnydy,dnzdz;
-            bool normal_exist;
-            
-            #pragma omp for collapse(3) private(j,k,Ic)
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                        Ic = I_c(i, j, k);
-                        curv[Ic] = 0.0;
-                        
-                        //勾配ベクトルの正規化
-                        // l=max(sqrt(sum_cons3(pow2(grad_VOF[0][Ic]),pow2(grad_VOF[1][Ic]),pow2(grad_VOF[2][Ic]))),1.0e-20);
-                        l=sqrt(sum_cons3(pow_int(grad_VOF[0][Ic],2),pow_int(grad_VOF[1][Ic],2),pow_int(grad_VOF[2][Ic],2)));
-                        if (l>1.0e-20 || 0){
-                            // grad_VOF[0][Ic]/=l; grad_VOF[1][Ic]/=l; grad_VOF[2][Ic]/=l;
-                            normal_vec[0][Ic]=grad_VOF[0][Ic]/l;
-                            normal_vec[1][Ic]=grad_VOF[1][Ic]/l;
-                            normal_vec[2][Ic]=grad_VOF[2][Ic]/l;
-                            normal_vec[3][Ic]=1.0;
-                        }
-                        else {
-                            // grad_VOF[0][Ic]=grad_VOF[1][Ic]=grad_VOF[2][Ic]=0.0;
-                            normal_vec[0][Ic]=normal_vec[1][Ic]=normal_vec[2][Ic]=0.0;
-                            normal_vec[3][Ic]=0.0;
-                        }
+    #pragma omp parallel
+    {
+        // int ii,jj;
+        // double grad_VOF_x,grad_VOF_y;
+        int xi,kc;
+        int nsc = 3;
+        double norm,dnxdx,dnydy,dnzdz;
+        bool normal_exist;
+        
+        #pragma omp for collapse(3) private(i,j,k,Ic)
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                    Ic = I_c(i, j, k);
+                    curv[Ic] = 0.0;
+                    
+                    // normalization of gradient vector
+                    norm=sqrt(sum_cons3(pow_int(grad_VOF[0][Ic],2),pow_int(grad_VOF[1][Ic],2),pow_int(grad_VOF[2][Ic],2)));
+                    if (norm>1.0e-20 || 0){
+                        normal_vec[0][Ic]=grad_VOF[0][Ic]/norm;
+                        normal_vec[1][Ic]=grad_VOF[1][Ic]/norm;
+                        normal_vec[2][Ic]=grad_VOF[2][Ic]/norm;
+                        normal_vec[3][Ic]=1.0;
+                    }
+                    else {
+                        normal_vec[0][Ic]=normal_vec[1][Ic]=normal_vec[2][Ic]=0.0;
+                        normal_vec[3][Ic]=0.0;
                     }
                 }
             }
-            #pragma omp for collapse(3) private(j,k,Ic)
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                        Ic = I_c(i, j, k);
-                        normal_exist=normal_vec[3][Ic]==1.0;
-                        if (dim>=1) normal_exist=normal_exist && (normal_vec[3][I_c(i+1,j,k)]==1.0) && (normal_vec[3][I_c(i-1,j,k)]==1.0);
-                        if (dim>=2) normal_exist=normal_exist && (normal_vec[3][I_c(i,j+1,k)]==1.0) && (normal_vec[3][I_c(i,j-1,k)]==1.0);
-                        if (dim>=3) normal_exist=normal_exist && (normal_vec[3][I_c(i,j,k+1)]==1.0) && (normal_vec[3][I_c(i,j,k-1)]==1.0);
-                        if (normal_exist || 0){
-                            // dnxdx=(grad_VOF[0][I_c(i+1,j,k)]-grad_VOF[0][I_c(i-1,j,k)])/(2.0*dx);
-                            // dnydy=(grad_VOF[1][I_c(i,j+1,k)]-grad_VOF[1][I_c(i,j-1,k)])/(2.0*dy);
-                            // dnzdz=(grad_VOF[2][I_c(i,j,k+1)]-grad_VOF[2][I_c(i,j,k-1)])/(2.0*dz);
-                            dnxdx=(normal_vec[0][I_c(i+1,j,k)]-normal_vec[0][I_c(i-1,j,k)])/(2.0*dx);
-                            dnydy=(normal_vec[1][I_c(i,j+1,k)]-normal_vec[1][I_c(i,j-1,k)])/(2.0*dy);
-                            dnzdz=(normal_vec[2][I_c(i,j,k+1)]-normal_vec[2][I_c(i,j,k-1)])/(2.0*dz);
-                        }
-                        else {
-                            dnxdx=dnydy=dnzdz=0.0;
-                        }
-                        
-                        //セル中心における曲率を計算
-                        curv[Ic]=-sum_cons3(dnxdx,dnydy,dnzdz);
-                        
+        }
+        #pragma omp for collapse(3) private(i,j,k,Ic)
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                    Ic = I_c(i, j, k);
+                    normal_exist=normal_vec[3][Ic]==1.0;
+                    if (dim>=1) normal_exist=normal_exist && (normal_vec[3][I_c(i+1,j,k)]==1.0) && (normal_vec[3][I_c(i-1,j,k)]==1.0);
+                    if (dim>=2) normal_exist=normal_exist && (normal_vec[3][I_c(i,j+1,k)]==1.0) && (normal_vec[3][I_c(i,j-1,k)]==1.0);
+                    if (dim>=3) normal_exist=normal_exist && (normal_vec[3][I_c(i,j,k+1)]==1.0) && (normal_vec[3][I_c(i,j,k-1)]==1.0);
+                    if (normal_exist || 0){
+                        dnxdx=(normal_vec[0][I_c(i+1,j,k)]-normal_vec[0][I_c(i-1,j,k)])/(2.0*dx);
+                        dnydy=(normal_vec[1][I_c(i,j+1,k)]-normal_vec[1][I_c(i,j-1,k)])/(2.0*dy);
+                        dnzdz=(normal_vec[2][I_c(i,j,k+1)]-normal_vec[2][I_c(i,j,k-1)])/(2.0*dz);
                     }
+                    else {
+                        dnxdx=dnydy=dnzdz=0.0;
+                    }
+                    
+                    // calculate curvature
+                    curv[Ic]=-sum_cons3(dnxdx,dnydy,dnzdz);
+                    
                 }
             }
         }
@@ -1760,69 +1742,66 @@ void curv_filter(int rk){
     double alpha1;
     
     // filtering strategy
-    if (1){
+    #pragma omp parallel
+    {
+        // int ii,jj;
+        
+        #pragma omp for collapse(3) private(i,j,k,Ic,alpha1)
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                    Ic = I_c(i, j, k);
+                    alpha1=U[rk][0][Ic];
+                    weight_filter[Ic]=pow_int(alpha1*(1.0-alpha1),2);
+                }
+            }
+        }
+        #pragma omp for collapse(3) private(i,j,k,Ic)
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy + 1; j < ngy + ny - 1; j++){ // each cell in y-direction
+                for (i = ngx + 1; i < ngx + nx - 1; i++){ // each cell in x-direction
+                    Ic = I_c(i, j, k);
+                    weight_sum_filter[Ic]=weight_filter[Ic]
+                        +((weight_filter[I_c(i-1,j-1,k)]+weight_filter[I_c(i+1,j+1,k)])
+                        + (weight_filter[I_c(i+1,j-1,k)]+weight_filter[I_c(i-1,j+1,k)]))
+                        +((weight_filter[I_c(i,j-1,k)]+weight_filter[I_c(i,j+1,k)])
+                        + (weight_filter[I_c(i-1,j,k)]+weight_filter[I_c(i+1,j,k)]));
+                    weight_sum_filter[Ic]=max(weight_sum_filter[Ic],1.0e-20);
+                }
+            }
+        }
+    }
+    int n_itr = 0, N_itr = 5;
+    while (n_itr < N_itr){
         #pragma omp parallel
         {
-            // int ii,jj;
-            
-            #pragma omp for collapse(3) private(j,k,Ic,alpha1)
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-                    for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                        Ic = I_c(i, j, k);
-                        alpha1=U[rk][0][Ic];
-                        weight_filter[Ic]=pow_int(alpha1*(1.0-alpha1),2);
-                        
+            #pragma omp for collapse(3) private(i,j,k,Ic)
+            for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+                for (j=ngy+1;j<ngy+ny-1;j++){ // each cell in y-direction
+                    for (i=ngx+1;i<ngx+nx-1;i++){ // each cell in x-direction
+                        Ic=I_c(i,j,k);
+                        curv_sum_filter[Ic]=weight_filter[Ic]*curv[Ic]
+                            +((weight_filter[I_c(i-1,j-1,k)]*curv[I_c(i-1,j-1,k)]+weight_filter[I_c(i+1,j+1,k)]*curv[I_c(i+1,j+1,k)])
+                            + (weight_filter[I_c(i+1,j-1,k)]*curv[I_c(i+1,j-1,k)]+weight_filter[I_c(i-1,j+1,k)]*curv[I_c(i-1,j+1,k)]))
+                            +((weight_filter[I_c(i,j-1,k)]*curv[I_c(i,j-1,k)]+weight_filter[I_c(i,j+1,k)]*curv[I_c(i,j+1,k)])
+                            + (weight_filter[I_c(i-1,j,k)]*curv[I_c(i-1,j,k)]+weight_filter[I_c(i+1,j,k)]*curv[I_c(i+1,j,k)]));
                     }
                 }
             }
-            #pragma omp for collapse(3) private(j,k,Ic)
-            for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-                for (j = ngy + 1; j < ngy + ny - 1; j++){ // each cell in y-direction
-                    for (i = ngx + 1; i < ngx + nx - 1; i++){ // each cell in x-direction
-                        Ic = I_c(i, j, k);
-                        weight_sum_filter[Ic]=weight_filter[Ic]
-                            +((weight_filter[I_c(i-1,j-1,k)]+weight_filter[I_c(i+1,j+1,k)])
-                            + (weight_filter[I_c(i+1,j-1,k)]+weight_filter[I_c(i-1,j+1,k)]))
-                            +((weight_filter[I_c(i,j-1,k)]+weight_filter[I_c(i,j+1,k)])
-                            + (weight_filter[I_c(i-1,j,k)]+weight_filter[I_c(i+1,j,k)]));
-                        weight_sum_filter[Ic]=max(weight_sum_filter[Ic],1.0e-20);
-                    }
-                }
-            }
-        }
-        int m=0,n_itr=5;
-        while (m<n_itr){
-            #pragma omp parallel
-            {
-                #pragma omp for collapse(3) private(j,k,Ic)
-                for (k=ngz;k<ngz+nz;k++){ //各セル
-                    for (j=ngy+1;j<ngy+ny-1;j++){ //各セル
-                        for (i=ngx+1;i<ngx+nx-1;i++){ //各セル
-                            Ic=I_c(i,j,k);
-                            curv_sum_filter[Ic]=weight_filter[Ic]*curv[Ic]
-                                +((weight_filter[I_c(i-1,j-1,k)]*curv[I_c(i-1,j-1,k)]+weight_filter[I_c(i+1,j+1,k)]*curv[I_c(i+1,j+1,k)])
-                                + (weight_filter[I_c(i+1,j-1,k)]*curv[I_c(i+1,j-1,k)]+weight_filter[I_c(i-1,j+1,k)]*curv[I_c(i-1,j+1,k)]))
-                                +((weight_filter[I_c(i,j-1,k)]*curv[I_c(i,j-1,k)]+weight_filter[I_c(i,j+1,k)]*curv[I_c(i,j+1,k)])
-                                + (weight_filter[I_c(i-1,j,k)]*curv[I_c(i-1,j,k)]+weight_filter[I_c(i+1,j,k)]*curv[I_c(i+1,j,k)]));
-                        }
-                    }
-                }
-                #pragma omp for collapse(3) private(j,k,Ic)
-                for (k=ngz;k<ngz+nz;k++){ //各セル
-                    for (j=ngy+1;j<ngy+ny-1;j++){ //各セル
-                        for (i=ngx+1;i<ngx+nx-1;i++){ //各セル
-                            Ic=I_c(i,j,k);
-                            curv[Ic]=curv_sum_filter[Ic]/weight_sum_filter[Ic];
-                            if (isnan(curv[Ic])){
-                                printf("stop\n"); getchar();
-                            }
+            #pragma omp for collapse(3) private(i,j,k,Ic)
+            for (k=ngz;k<ngz+nz;k++){ // each cell in z-direction
+                for (j=ngy+1;j<ngy+ny-1;j++){ // each cell in y-direction
+                    for (i=ngx+1;i<ngx+nx-1;i++){ // each cell in x-direction
+                        Ic=I_c(i,j,k);
+                        curv[Ic]=curv_sum_filter[Ic]/weight_sum_filter[Ic];
+                        if (isnan(curv[Ic])){
+                            printf("stop\n"); getchar();
                         }
                     }
                 }
             }
-            m++;
         }
+        n_itr++;
     }
 }
 
