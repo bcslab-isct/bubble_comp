@@ -82,7 +82,8 @@ int ngx_CSF, ngy_CSF, ngz_CSF, NX_CSF, NY_CSF, NZ_CSF, NN_CSF; // number of ghos
 double sigma_CSF;
 vec2d grad_VOF,normal_vec;
 vec1d curv;
-vec1d VOF_x_HLLC, VOF_y_HLLC, VOF_z_HLLC; // VOF value at cell center in x, y, z-direction derived from HLLC
+vec1d VOF_x_Riemann, VOF_y_Riemann, VOF_z_Riemann; // VOF value at cell boundary in x, y, z-direction derived from Riemann solver
+vec1d u_Riemann, v_Riemann, w_Riemann; // velocity at cell boundary in x, y, z-direction derived from Riemann solver
 vec1d weight_filter, weight_sum_filter, curv_sum_filter;
 
 vec1d coef_Pn_D1_CC;
@@ -117,7 +118,7 @@ double Phi_MUSCL(double);
 void THINC(double*, double*, const vec1d&);
 void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R, vec3i&);
 // void bvc_Euler_x(int);
-void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const vec3d& W_R, vec2d& Amdq, vec2d& Apdq, vec2d& Adq);
+void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const vec3d& W_R, vec2d& Amdq, vec2d& Apdq, vec2d& Adq, vec1d& vel_Riemann, vec1d& col_Riemann);
 void cal_dt(double,double,double);
 void update(int);
 void output_result();
@@ -168,9 +169,9 @@ int main(void){
             
             // calculate numerical flux
             // Riemann_solver_5eq_HLLC(&MWS_x, &MWS_y, &MWS_z);
-            if (dim >= 1) Riemann_solver_5eq_HLLC_dim(0, &MWS_x, W_x_L, W_x_R, Amdq_x, Apdq_x, Adq_x);
-            if (dim >= 2) Riemann_solver_5eq_HLLC_dim(1, &MWS_y, W_y_L, W_y_R, Amdq_y, Apdq_y, Adq_y);
-            if (dim >= 3) Riemann_solver_5eq_HLLC_dim(2, &MWS_z, W_z_L, W_z_R, Amdq_z, Apdq_z, Adq_z);
+            if (dim >= 1) Riemann_solver_5eq_HLLC_dim(0, &MWS_x, W_x_L, W_x_R, Amdq_x, Apdq_x, Adq_x, u_Riemann, VOF_x_Riemann);
+            if (dim >= 2) Riemann_solver_5eq_HLLC_dim(1, &MWS_y, W_y_L, W_y_R, Amdq_y, Apdq_y, Adq_y, v_Riemann, VOF_y_Riemann);
+            if (dim >= 3) Riemann_solver_5eq_HLLC_dim(2, &MWS_z, W_z_L, W_z_R, Amdq_z, Apdq_z, Adq_z, w_Riemann, VOF_z_Riemann);
             
             // update numerical solution
             cal_dt(MWS_x, MWS_y, MWS_z);
@@ -389,11 +390,14 @@ void parameter(){
         curv=vec1d(NN_CSF);
         coefficient_linear_polynoimal_1stDerivative_CellCenter(order_grad_VOF+1);
         
+        VOF_x_Riemann=vec1d(NBX,0.0);
+        VOF_y_Riemann=vec1d(NBY,0.0);
+        VOF_z_Riemann=vec1d(NBZ,0.0);
+        u_Riemann=vec1d(NBX,0.0);
+        v_Riemann=vec1d(NBY,0.0);
+        w_Riemann=vec1d(NBZ,0.0);
         // filtering for surface tension
         if (surface_tension_type==2){
-            VOF_x_HLLC=vec1d(NBX,0.0);
-            VOF_y_HLLC=vec1d(NBY,0.0);
-            VOF_z_HLLC=vec1d(NBZ,0.0);
             weight_filter=vec1d(NN,0.0);
             weight_sum_filter=vec1d(NN,0.0);
             curv_sum_filter=vec1d(NN_CSF);
@@ -1043,7 +1047,7 @@ void BVD_selection_dim(int d, int rk, vec3d& W_L, vec3d& W_R, vec3i& BVD_active_
     }
 }
 
-void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const vec3d& W_R, vec2d& Amdq, vec2d& Apdq, vec2d& Adq){
+void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const vec3d& W_R, vec2d& Amdq, vec2d& Apdq, vec2d& Adq, vec1d& vel_Riemann, vec1d& col_Riemann){
     int i,j,k,m;
     double mws_d=0.0;
     
@@ -1265,6 +1269,14 @@ void Riemann_solver_5eq_HLLC_dim(int d, double *MWS_d, const vec3d& W_L, const v
                         Apdq[m_list[m]][Ib] = (S_L_plus * W1 + S_R_plus * W3) + S_s_plus * W2;
                         Amdq[m_list[m]][Ib] = (S_L_minus * W1 + S_R_minus * W3) + S_s_minus * W2;
                     }
+                    
+                    // calculate velocity and color function at cell boundary for evaluating surface tension term
+                    if (surface_tension_type == 1 || surface_tension_type == 2){
+                        vel_Riemann[Ib] = 0.5 * (1.0 + sign(S_star)) * (u_L + S_L_minus * (S_ratio_L - 1.0))
+                                        + 0.5 * (1.0 - sign(S_star)) * (u_R + S_R_plus * (S_ratio_R - 1.0));
+                        col_Riemann[Ib] = 0.5 * (1.0 + sign(S_star)) * alpha1_L * (1.0 + 0.5 * (1.0 - sign(S_L)) * (S_ratio_L - 1.0))
+                                        + 0.5 * (1.0 - sign(S_star)) * alpha1_R * (1.0 + 0.5 * (1.0 + sign(S_R)) * (S_ratio_R - 1.0));
+                    }
                 }
             }
         }
@@ -1433,50 +1445,84 @@ void cal_dt(double MWS_x, double MWS_y, double MWS_z){
 }
 
 void update(int rk){
-    int i, j, k, m, Ic, Ixm, Ixp, Iym, Iyp, Izm, Izp, s, rk_next = (rk + 1) % RK_stage;
-    double L, rho, rhou, rhoE, u, p;
+    int i, j, k, m, Ic, rk_next = (rk + 1) % RK_stage;
     
-    #pragma omp parallel for collapse(3) private(i, j, k, m, Ic, Ixm, Ixp, Iym, Iyp, Izm, Izp, L, s)
-    for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
-        for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
-            for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
-                Ic = I_c(i, j, k); // index of cell
-                Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
-                Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
-                Iym = I_y(i, j, k); // index of cell boundary at y_{j-1/2}
-                Iyp = I_y(i, j + 1, k); // index of cell boundary at y_{j+1/2}
-                Izm = I_z(i, j, k); // index of cell boundary at z_{k-1/2}
-                Izp = I_z(i, j, k + 1); // index of cell boundary at z_{k+1/2}
-                
-                for (m = 0; m < num_var; m++){
+    #pragma omp parallel
+    {
+        int Ixm, Ixp, Iym, Iyp, Izm, Izp, s;
+        double rho, rhou, rhoE, u, p;
+        vec1d dqdt(num_var, 0.0); // spatial discrete operator
+    
+        #pragma omp for collapse(3) private(i, j, k, m, Ic)
+        for (k = ngz; k < ngz + nz; k++){ // each cell in z-direction
+            for (j = ngy; j < ngy + ny; j++){ // each cell in y-direction
+                for (i = ngx; i < ngx + nx; i++){ // each cell in x-direction
+                    Ic = I_c(i, j, k); // index of cell
+                    Ixm = I_x(i, j, k); // index of cell boundary at x_{i-1/2}
+                    Ixp = I_x(i + 1, j, k); // index of cell boundary at x_{i+1/2}
+                    Iym = I_y(i, j, k); // index of cell boundary at y_{j-1/2}
+                    Iyp = I_y(i, j + 1, k); // index of cell boundary at y_{j+1/2}
+                    Izm = I_z(i, j, k); // index of cell boundary at z_{k-1/2}
+                    Izp = I_z(i, j, k + 1); // index of cell boundary at z_{k+1/2}
+                    
                     // calculate spatial discrete operator
-                    // L = -(F_x[m][i + 1] - F_x[m][i]) / dx;
-                    if (dim == 1) L = -((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx;
-                    if (dim == 2) L = -((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx
-                                      -((Amdq_y[m][Iyp] + Apdq_y[m][Iym]) + Adq_y[m][Ic]) / dy;
-                    if (dim == 3) L = sum_cons3(-((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx,
-                                                -((Amdq_y[m][Iyp] + Apdq_y[m][Iym]) + Adq_y[m][Ic]) / dy,
-                                                -((Amdq_z[m][Izp] + Apdq_z[m][Izm]) + Adq_z[m][Ic]) / dz);
-                                    
-                    // obtain numerical solution at next sub-step in Runge Kutta method
-                    U[rk_next][m][Ic] = RK_alpha[rk][0] * U[0][m][Ic];
-                    for (s = 1; s <= rk; s++){
-                        U[rk_next][m][Ic] += RK_alpha[rk][s] * U[s][m][Ic];
+                    for (m = 0; m < num_var; m++){
+                        // dqdt = -(F_x[m][i + 1] - F_x[m][i]) / dx;
+                        if (dim == 1) dqdt[m] = -((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx;
+                        if (dim == 2) dqdt[m] = -((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx
+                                                -((Amdq_y[m][Iyp] + Apdq_y[m][Iym]) + Adq_y[m][Ic]) / dy;
+                        if (dim == 3) dqdt[m] = sum_cons3(-((Amdq_x[m][Ixp] + Apdq_x[m][Ixm]) + Adq_x[m][Ic]) / dx,
+                                                          -((Amdq_y[m][Iyp] + Apdq_y[m][Iym]) + Adq_y[m][Ic]) / dy,
+                                                          -((Amdq_z[m][Izp] + Apdq_z[m][Izm]) + Adq_z[m][Ic]) / dz);
                     }
-                    U[rk_next][m][Ic] += RK_beta[rk] * L * dt;
+                    
+                    // calculate surface tension term
+                    if (surface_tension_type == 1 || surface_tension_type == 2){
+                        if (dim >= 1) dqdt[3]+=sigma_CSF*curv[Ic]*(VOF_x_Riemann[Ixp]-VOF_x_Riemann[Ixm])/dx;
+                        if (dim >= 2) dqdt[4]+=sigma_CSF*curv[Ic]*(VOF_y_Riemann[Iyp]-VOF_y_Riemann[Iym])/dy;
+                        if (dim >= 3) dqdt[5]+=sigma_CSF*curv[Ic]*(VOF_z_Riemann[Izp]-VOF_z_Riemann[Izm])/dz;
+                        
+                        if (dim == 1){
+                            dqdt[6]+=sigma_CSF*curv[Ic]*((VOF_x_Riemann[Ixp]*u_Riemann[Ixp]-VOF_x_Riemann[Ixm]*u_Riemann[Ixm])/dx
+                                                        -U[rk][0][Ic]*(u_Riemann[Ixp]-u_Riemann[Ixm])/dx);
+                        }
+                        else if (dim == 2){
+                            dqdt[6]+=sigma_CSF*curv[Ic]*(((VOF_x_Riemann[Ixp]*u_Riemann[Ixp]-VOF_x_Riemann[Ixm]*u_Riemann[Ixm])/dx
+                                                        +(VOF_y_Riemann[Iyp]*v_Riemann[Iyp]-VOF_y_Riemann[Iym]*v_Riemann[Iym])/dy)
+                                                        -U[rk][0][Ic]*((u_Riemann[Ixp]-u_Riemann[Ixm])/dx
+                                                                      +(v_Riemann[Iyp]-v_Riemann[Iym])/dy));
+                        }
+                        else if (dim == 3){
+                            dqdt[6]+=sigma_CSF*curv[Ic]*(sum_cons3((VOF_x_Riemann[Ixp]*u_Riemann[Ixp]-VOF_x_Riemann[Ixm]*u_Riemann[Ixm])/dx,
+                                                                   (VOF_y_Riemann[Iyp]*v_Riemann[Iyp]-VOF_y_Riemann[Iym]*v_Riemann[Iym])/dy,
+                                                                   (VOF_z_Riemann[Izp]*w_Riemann[Izp]-VOF_z_Riemann[Izm]*w_Riemann[Izm])/dz)
+                                    -U[rk][0][Ic]*sum_cons3((u_Riemann[Ixp]-u_Riemann[Ixm])/dx,
+                                                            (v_Riemann[Iyp]-v_Riemann[Iym])/dy,
+                                                            (w_Riemann[Izp]-w_Riemann[Izm])/dz));
+                        }
+                    }
+                    
+                    // obtain numerical solution at next sub-step in Runge Kutta method
+                    for (m = 0; m < num_var; m++){
+                        U[rk_next][m][Ic] = RK_alpha[rk][0] * U[0][m][Ic];
+                        for (s = 1; s <= rk; s++){
+                            U[rk_next][m][Ic] += RK_alpha[rk][s] * U[s][m][Ic];
+                        }
+                        U[rk_next][m][Ic] += RK_beta[rk] * dqdt[m] * dt;
+                    }
+                    
+                    // check positivity
+                    // rho = U[rk_next][0][Ic];
+                    // rhou = U[rk_next][1][Ic];
+                    // rhoE = U[rk_next][2][Ic];
+                    // u = rhou / rho;
+                    // p = (gamma_ - 1.0) * (rhoE - 0.5 * rho * u * u);
+                    // if (rho <= 0.0 || p <= 0.0){
+                    //     cout << "rho or p < 0" << endl;
+                    //     cout << "rho = " << rho << ", p = " << p << endl;
+                    //     getchar();
+                    // }
                 }
-                
-                // check positivity
-                // rho = U[rk_next][0][Ic];
-                // rhou = U[rk_next][1][Ic];
-                // rhoE = U[rk_next][2][Ic];
-                // u = rhou / rho;
-                // p = (gamma_ - 1.0) * (rhoE - 0.5 * rho * u * u);
-                // if (rho <= 0.0 || p <= 0.0){
-                //     cout << "rho or p < 0" << endl;
-                //     cout << "rho = " << rho << ", p = " << p << endl;
-                //     getchar();
-                // }
             }
         }
     }
