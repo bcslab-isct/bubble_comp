@@ -137,6 +137,16 @@ void curv_cal();
 void curv_filter(int);
 void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n);
 
+//paraview可視化用
+void get_vel_vel(vec2d &velocity);
+template <typename T>
+void exportVectorPointDataVTI(const std::string &file, const char *dataName, std::vector<std::vector<T>> &p, 
+    const int nx, const int ny, const int nz, const double dx, const double dy, const double dz);
+template <typename T>
+void exportVectorCellDataVTI(const std::string &file, const char *dataName, std::vector<std::vector<T>> &c, 
+    const int nx, const int ny, const int nz, const double dx, const double dy, const double dz);
+void plot_result();
+
 int main(void){
     
     int i, d, m, rk, per;
@@ -196,7 +206,13 @@ int main(void){
     if (bvc_check == 1) cout << "bvc is activated" << endl;
     
     output_result();
-    
+
+    std::string output_file = "velocity.vti";//para vti
+    vec2d velocity;
+    get_vel_vel(velocity);
+    exportVectorCellDataVTI<double>(output_file, "velocity", velocity, nx, ny, nz, 1e0, 1e0, 1e0);
+    plot_result();    
+
     return 0;
 }
 
@@ -1535,7 +1551,7 @@ void output_result(){
     
     std::ofstream file_result("./result.csv");
     
-    file_result << "x,y,z,alpha1,rho1,rho2,u,v,w,p,rho,Y1,BVD_func\n";
+    file_result << "#x,y,z,alpha1,rho1,rho2,u,v,w,p,rho,Y1,BVD_func\n";
     for (i = ngx; i < ngx + nx; i++){
         for (j = ngy; j < ngy + ny; j++){
             for (k = ngz; k < ngz + nz; k++){
@@ -1583,6 +1599,88 @@ void output_result(){
     }
     
     file_result.close();
+}
+
+void plot_result(){
+    
+    FILE *gp;
+    string variable_name;
+    double yr_min, yr_max;
+    
+    int plot_var = 1; // 1: volume fraction
+    if      (plot_var == 1) variable_name = "volume fraction";
+    // else if (plot_var == 2) variable_name = "velocity";
+    // else if (plot_var == 3) variable_name = "pressure";
+    // else if (plot_var == 4) variable_name = "BVD_active";
+    
+    // if (problem_type == 1){ // Sod problem
+    //     yr_min = 0.0; yr_max = 1.2;
+    // }
+    // else if (problem_type == 2){ // Le Blanc problem
+    //     yr_min = 1.0e-3; yr_max = 1.0;
+    // }
+    yr_min = 0.0; yr_max = 1.2;
+    
+    #if defined(_WIN32) || defined(_WIN64)
+        // for windows pc
+        gp = _popen(GNUPLOT, "w");
+        if (!gp){
+            cout << "unable to start gnuplot" << endl;
+        }
+        else {
+            // plot numerical result using gnuplot
+            fprintf(gp, "set term wxt 1\n");
+            fprintf(gp, "set size ratio 1\n");
+            fprintf(gp, "set yr[%f:%f]\n", yr_min, yr_max);
+            fprintf(gp, "set xl \"x\"\n");
+            fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
+            fprintf(gp, "set title \"1D Euler\"\n");
+            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
+            fflush(gp);
+            _pclose(gp);
+        }
+        
+    #elif defined(__APPLE__) && defined(__MACH__)
+        // for mac pc
+        gp = popen(GNUPLOT, "w");
+        if (!gp){
+            cout << "unable to start gnuplot" << endl;
+        }
+        else {
+            // plot numerical result using gnuplot
+            // fprintf(gp, "set term wxt 1\n");
+            fprintf(gp, "set size ratio 1\n");
+            fprintf(gp, "set yr[%f:%f]\n", yr_min, yr_max);
+            fprintf(gp, "set xl \"x\"\n");
+            fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
+            fprintf(gp, "set title \"1D Euler\"\n");
+            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 1, scheme_name.c_str());
+            fflush(gp);
+            pclose(gp);
+        }
+        
+    #elif defined(__linux__)
+        // for linux pc
+        gp = popen(GNUPLOT, "w");
+        if (!gp){
+            cout << "unable to start gnuplot" << endl;
+        }
+        else {
+            // plot numerical result using gnuplot
+            fprintf(gp, "set term wxt 1\n");
+            fprintf(gp, "set size ratio 1\n");
+            // fprintf(gp, "set logscale y\n");
+            fprintf(gp, "set yr[%f:%f]\n", yr_min, yr_max);
+            fprintf(gp, "set xl \"x\"\n");
+            fprintf(gp, "set yl \"%s\"\n", variable_name.c_str());
+            fprintf(gp, "set title \"1D Euler\"\n");
+            fprintf(gp, "plot \"./result.csv\" using %d:%d title \"%s\" w lp lt 7 ps 1\n", 1, plot_var + 3, scheme_name.c_str());
+            fflush(gp);
+            pclose(gp);
+        }
+        
+    #endif
+        
 }
 
 double sign(double a){
@@ -1892,4 +1990,149 @@ void coefficient_linear_polynoimal_1stDerivative_CellCenter(int n){
         coef_Pn_D1_CC[k]/=deno;
     }
     
+}
+
+void get_vel_vel(vec2d &velocity)//paraベクトル用
+{
+    int i, j, k, m, Ic, d, rk;
+    double alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE, rho1, rho2, u, v, w, p;
+    const unsigned int size = nx * ny * nz;
+    velocity.resize(size, std::vector<double>(3, 0e0));
+
+    unsigned int index = 0;
+    
+    for (i = ngx; i < ngx + nx; i++){
+        for (j = ngy; j < ngy + ny; j++){
+            for (k = ngz; k < ngz + nz; k++){
+                Ic = I_c(i, j, k);
+
+                alpha1 = U[0][0][Ic];
+                alpha1rho1 = U[0][1][Ic];
+                alpha2rho2 = U[0][2][Ic];
+                rhou = U[0][3][Ic];
+                rhov = U[0][4][Ic];
+                rhow = U[0][5][Ic];
+                rhoE = U[0][6][Ic];
+
+                cons_to_prim_5eq(&rho1, &rho2, &u, &v, &w, &p,
+                                 alpha1, alpha1rho1, alpha2rho2, rhou, rhov, rhow, rhoE);
+                velocity[index][0] = u; 
+                velocity[index][1] = v;
+                velocity[index][2] = w;
+
+                index++;
+            }
+        }
+    }
+}
+
+template <typename T>
+void exportVectorCellDataVTI(const std::string &file, const char *dataName, std::vector<std::vector<T>> &c, 
+    const int nx, const int ny, const int nz, const double dx, const double dy, const double dz)
+{
+  FILE *fp;
+  fp = fopen(file.c_str(), "w");
+
+  if(fp == NULL) {
+    std::cerr << file << " open error" << std::endl;
+    exit(1);
+  }
+  fprintf(fp, "<?xml version=\"1.0\"?>\n");
+  fprintf(fp, "<VTKFile type=\"ImageData\" version=\"1.0\" byte_order=\"LittleEndian\" header_type=\"UInt64\">\n");
+  fprintf(fp, "<ImageData WholeExtent= \"%d %d %d %d %d %d\" Origin= \"%e %e %e\" Spacing= \"%e %e %e\" >\n", 0, nx, 0, ny, 0, nz, 0e0, 0e0, 0e0, dx, dy, dz);
+  fprintf(fp, "<Piece Extent= \"%d %d %d %d %d %d\">\n", 0, nx, 0, ny, 0, nz);
+  fprintf(fp, "<PointData>\n");
+  fprintf(fp, "</PointData>\n");
+  fprintf(fp, "<CellData>\n");
+  fprintf(fp, "<DataArray type=\"Float32\" Name=\"%s\" NumberOfComponents=\"3\" format=\"appended\" offset=\"0\">\n", dataName);
+  fprintf(fp, "</DataArray>\n");
+  fprintf(fp, "</CellData>\n");
+  fprintf(fp, "</Piece>\n");
+  fprintf(fp, "</ImageData>\n");
+  fprintf(fp, "<AppendedData encoding=\"raw\">\n");
+  fprintf(fp, "_");
+  fclose(fp);
+
+  float *data = new float[nx * ny * nz * 3];
+  unsigned long allsize = nx * ny * nz * 3 * sizeof(float);
+  for(int k = 0; k < nz; k++) {
+    for(int j = 0; j < ny; j++) {
+      for(int i = 0; i < nx; i++) {
+        int n = i + j * nx + k * nx * ny;
+        data[0 + i * 3 + j * nx * 3 + k * nx * ny * 3] = static_cast<float>(c[n][0]);
+        data[1 + i * 3 + j * nx * 3 + k * nx * ny * 3] = static_cast<float>(c[n][1]);
+        data[2 + i * 3 + j * nx * 3 + k * nx * ny * 3] = static_cast<float>(c[n][2]);
+      }
+    }
+  }
+
+  std::fstream ofs;
+  ofs.open(file.c_str(), std::ios::out | std::ios::app | std::ios_base::binary);
+  ofs.write(reinterpret_cast<char *>(&allsize), sizeof(allsize));
+  ofs.write(reinterpret_cast<char *>(data), allsize);
+  ofs.close();
+
+  delete[] data;
+
+  fp = fopen(file.c_str(), "a");
+  fprintf(fp, "\n");
+  fprintf(fp, "</AppendedData>\n");
+  fprintf(fp, "</VTKFile>\n");
+  fclose(fp);
+}
+
+template <typename T>
+void exportVectorPointDataVTI(const std::string &file, const char *dataName, std::vector<std::vector<T>> &p, 
+                             const int nx, const int ny, const int nz, const double dx, const double dy, const double dz)
+{
+  FILE *fp;
+  fp = fopen(file.c_str(), "w");
+
+  if(fp == NULL) {
+    std::cerr << file << " open error" << std::endl;
+    exit(1);
+  }
+  fprintf(fp, "<?xml version=\"1.0\"?>\n");
+  fprintf(fp, "<VTKFile type=\"ImageData\" version=\"1.0\" byte_order=\"LittleEndian\" header_type=\"UInt64\">\n");
+  fprintf(fp, "<ImageData WholeExtent= \"%d %d %d %d %d %d\" Origin= \"%e %e %e\" Spacing= \"%e %e %e\" >\n", 0, nx, 0, ny, 0, nz, 0e0, 0e0, 0e0, dx, dy, dz);
+  fprintf(fp, "<Piece Extent= \"%d %d %d %d %d %d\">\n", 0, nx, 0, ny, 0, nz);
+  fprintf(fp, "<PointData>\n");
+  fprintf(fp, "<DataArray type=\"Float32\" Name=\"%s\" NumberOfComponents=\"3\" format=\"appended\" offset=\"0\">\n", dataName);
+  fprintf(fp, "</DataArray>\n");
+  fprintf(fp, "</PointData>\n");
+  fprintf(fp, "<CellData>\n");
+  fprintf(fp, "</CellData>\n");
+  fprintf(fp, "</Piece>\n");
+  fprintf(fp, "</ImageData>\n");
+  fprintf(fp, "<AppendedData encoding=\"raw\">\n");
+  fprintf(fp, "_");
+  fclose(fp);
+
+  unsigned long allsize = (nx + 1) * (ny + 1) * (nz + 1) * 3 * sizeof(float);
+
+  float *data = new float[(nx + 1) * (ny + 1) * (nz + 1) * 3];
+  for(int k = 0; k < nz + 1; k++) {
+    for(int j = 0; j < ny + 1; j++) {
+      for(int i = 0; i < nx + 1; i++) {
+        int n = i + j * (nx + 1) + k * (nx + 1) * (ny + 1);
+        data[0 + i * 3 + j * (nx + 1) * 3 + k * (nx + 1) * (ny + 1) * 3] = static_cast<float>(p[n][0]);
+        data[1 + i * 3 + j * (nx + 1) * 3 + k * (nx + 1) * (ny + 1) * 3] = static_cast<float>(p[n][1]);
+        data[2 + i * 3 + j * (nx + 1) * 3 + k * (nx + 1) * (ny + 1) * 3] = static_cast<float>(p[n][2]);
+      }
+    }
+  }
+
+  std::fstream ofs;
+  ofs.open(file.c_str(), std::ios::out | std::ios::app | std::ios_base::binary);
+  ofs.write(reinterpret_cast<char *>(&allsize), sizeof(allsize));
+  ofs.write(reinterpret_cast<char *>(data), allsize);
+  ofs.close();
+
+  delete[] data;
+
+  fp = fopen(file.c_str(), "a");
+  fprintf(fp, "\n");
+  fprintf(fp, "</AppendedData>\n");
+  fprintf(fp, "</VTKFile>\n");
+  fclose(fp);
 }
